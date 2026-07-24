@@ -1,0 +1,27 @@
+{
+  "productName": "Venture",
+  "version": "0.1.0",
+  "identifier": "com.venture.app",
+  "build": {
+    "frontendDist": "../dist/web",
+    "devUrl": "http://localhost:5174",
+    "beforeDevCommand": "vite --port 5174",
+    "beforeBuildCommand": "npm run build:tauri"
+  },
+  "app": {
+    "windows": [{"title": "Venture"}],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png"
+    ],
+    "android": {}
+  }
+}
