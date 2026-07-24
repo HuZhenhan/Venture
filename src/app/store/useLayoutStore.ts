@@ -110,6 +110,7 @@ interface LayoutComputationState {
   isUsageOpen: boolean;
   isResizingEditor: boolean;
   isResizingSidebar: boolean;
+  isRightRailOpen: boolean;
 }
 
 function hasPanelVisibilityChanged(
@@ -126,7 +127,7 @@ function hasPanelVisibilityChanged(
 }
 
 function deriveResponsiveLayout(state: LayoutComputationState): ResponsiveLayout {
-  const reservedRightWidth = RIGHT_RAIL_WIDTH;
+  const reservedRightWidth = state.isRightRailOpen ? RIGHT_RAIL_WIDTH : 0;
   const shouldForceSidebarOverlay = state.viewportWidth < SMALL_SCREEN_SIDEBAR_BREAKPOINT;
   const sidebarParticipatesInLayout = state.isSidebarOpen && !shouldForceSidebarOverlay;
   const minimumRightPanelWidth = MIN_EDITOR_WIDTH;
@@ -138,21 +139,28 @@ function deriveResponsiveLayout(state: LayoutComputationState): ResponsiveLayout
   const workflowParticipatesInLayout = !singlePageMode && state.activeWorkspaceView === 'workflow';
   const settingsParticipatesInLayout = !singlePageMode && state.isSettingsOpen && state.activeWorkspaceView === 'settings';
   const usageParticipatesInLayout = !singlePageMode && state.isUsageOpen && state.activeWorkspaceView === 'usage';
+  // 浏览器/工作流打开时折叠聊天区，让它从屏幕左边缘开始
+  const shouldCollapseChat = (singlePageMode && state.activeWorkspaceView !== 'chat')
+    || browserParticipatesInLayout
+    || workflowParticipatesInLayout;
+  const chatReserve = shouldCollapseChat ? 0 : 320;
   const availableBesideSidebar = Math.max(
     usableViewportWidth - (sidebarParticipatesInLayout ? state.sidebarWidth : 0),
     0
   );
+  const browserWidthTarget = shouldCollapseChat ? availableBesideSidebar : BROWSER_PANEL_WIDTH;
   const browserWidth = browserParticipatesInLayout
-    ? panelWidthForAvailable(BROWSER_PANEL_WIDTH, MIN_BROWSER_WIDTH, availableBesideSidebar - 320)
+    ? panelWidthForAvailable(browserWidthTarget, MIN_BROWSER_WIDTH, availableBesideSidebar - chatReserve)
     : 0;
+  const workflowWidthTarget = shouldCollapseChat ? availableBesideSidebar : BROWSER_PANEL_WIDTH;
   const workflowWidth = workflowParticipatesInLayout
-    ? panelWidthForAvailable(BROWSER_PANEL_WIDTH, MIN_BROWSER_WIDTH, availableBesideSidebar - 320)
+    ? panelWidthForAvailable(workflowWidthTarget, MIN_BROWSER_WIDTH, availableBesideSidebar - chatReserve)
     : 0;
   const settingsPanelWidth = settingsParticipatesInLayout || usageParticipatesInLayout
     ? panelWidthForAvailable(
         state.settingsWidth,
         MIN_SETTINGS_WIDTH,
-        availableBesideSidebar - 320
+        availableBesideSidebar - chatReserve
       )
     : 0;
   const activeExtraPanelWidth = browserWidth + workflowWidth
@@ -202,7 +210,7 @@ function deriveResponsiveLayout(state: LayoutComputationState): ResponsiveLayout
     chatWidth: singlePageMode && state.activeWorkspaceView !== 'chat'
       ? COLLAPSED_CHAT_WIDTH
       : Math.max(availableForCore - resSidebarWidth - resEditorWidth, availableForCore * 0.2),
-    chatCollapsed: singlePageMode && state.activeWorkspaceView !== 'chat',
+    chatCollapsed: shouldCollapseChat,
     browserWidth,
     settingsPanelWidth,
     sidebarUsesOverlay,
@@ -263,6 +271,8 @@ export const selectShowTestButton = (state: LayoutState) => state.showTestButton
 export const selectShowLayoutDebug = (state: LayoutState) => state.showLayoutDebug;
 export const selectSetShowTestButton = (state: LayoutState) => state.setShowTestButton;
 export const selectSetShowLayoutDebug = (state: LayoutState) => state.setShowLayoutDebug;
+export const selectIsRightRailOpen = (state: LayoutState) => state.isRightRailOpen;
+export const selectToggleRightRail = (state: LayoutState) => state.toggleRightRail;
 
 const layoutCache: { value: ResponsiveLayout | null } = { value: null };
 
@@ -292,9 +302,11 @@ interface LayoutState {
   activeCodeReference: CodeReference | null;
   codeReferenceRevealToken: number;
   singlePageView: SinglePageView;
+  isRightRailOpen: boolean;
 
   // Actions
   setIsSidebarOpen: (open: boolean) => void;
+  toggleRightRail: () => void;
   setIsSettingsOpen: (open: boolean) => void;
   setActiveSettingsTab: (tab: SettingsTab) => void;
   setIsUsageOpen: (open: boolean) => void;
@@ -353,6 +365,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   activeCodeReference: null,
   codeReferenceRevealToken: 0,
   singlePageView: 'chat',
+  isRightRailOpen: false,
 
   showFpsOverlay: false,
   showOriginalContentDebug: false,
@@ -382,6 +395,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
     const sidebarWidth = nextOpen && state.sidebarWidth < MIN_SIDEBAR_WIDTH ? MIN_SIDEBAR_WIDTH : state.sidebarWidth;
     return { isSidebarOpen: nextOpen, sidebarWidth };
   }),
+  toggleRightRail: () => set((state) => ({ isRightRailOpen: !state.isRightRailOpen })),
   toggleBrowser: () => set((state) => {
     const isBrowserOpen = !state.isBrowserOpen;
     const activeWorkspaceView = isBrowserOpen
@@ -396,6 +410,7 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       isBrowserOpen,
       activeWorkspaceView,
       singlePageView: isBrowserOpen ? 'browser' : activeWorkspaceView,
+      isSidebarOpen: isBrowserOpen ? false : state.isSidebarOpen,
     };
   }),
   toggleBrowserSummary: () => set((state) => ({ isBrowserSummaryOpen: !state.isBrowserSummaryOpen })),
@@ -451,7 +466,10 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       set(nextState);
     }
   },
-  showChatPanel: () => set((state) => resolveShowChatState(state)),
+  showChatPanel: () => set((state) => ({
+    ...resolveShowChatState(state),
+    isRightRailOpen: false,
+  })),
   showPanel: (panel, fallbackDiffId) => {
     const state = get();
     const responsive = deriveResponsiveLayout(state);

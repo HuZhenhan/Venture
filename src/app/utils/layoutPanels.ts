@@ -119,7 +119,7 @@ export function resolveAdaptivePanelVisibility(args: AdaptivePanelVisibilityArgs
   const showBrowser = args.isBrowserOpen && (args.browserParticipatesInLayout || singlePageView === 'browser');
 
   return {
-    showChat: !args.chatCollapsed || singlePageView === 'chat',
+    showChat: !args.chatCollapsed,
     showBrowser,
     showWorkflow: activeView === 'workflow',
     showSettings: args.isSettingsOpen && (args.settingsParticipatesInLayout || singlePageView === 'settings'),

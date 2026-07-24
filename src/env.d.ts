@@ -69,6 +69,29 @@ interface DesktopShellApi {
   ) => () => void;
 }
 
+/** Android 原生 WebView 浏览器桥接 */
+interface BrowserBridgeApi {
+  open(url: string, x: number, y: number, w: number, h: number): void;
+  navigate(url: string): void;
+  goBack(): void;
+  goForward(): void;
+  reload(): void;
+  setBounds(x: number, y: number, w: number, h: number): void;
+  summarize(callbackId: string): void;
+  hide(): void;
+  close(): void;
+  openExternal(url: string): void;
+}
+
+/** 前端存储的 summarize Promise resolver */
+interface BrowserSummaryCallback {
+  resolve: (value: BrowserSummary) => void;
+  reject: (reason: Error) => void;
+}
+
 interface Window {
   desktopShell?: DesktopShellApi;
+  BrowserBridge?: BrowserBridgeApi;
+  __browser_summary_callbacks?: Record<string, BrowserSummaryCallback>;
+  __browser_summary_result?: (callbackId: string, summary: BrowserSummary) => void;
 }

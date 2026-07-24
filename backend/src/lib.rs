@@ -219,6 +219,7 @@ pub async fn run_server(data_dir: Option<PathBuf>) -> anyhow::Result<()> {
                     orig_str.starts_with("http://localhost")
                         || orig_str.starts_with("http://127.0.0.1")
                         || orig_str.starts_with("tauri://")
+                        || orig_str.starts_with("http://tauri.localhost")
                         || orig_str.starts_with("https://tauri.localhost")
                         || orig_str.starts_with("file://")
                 } else {

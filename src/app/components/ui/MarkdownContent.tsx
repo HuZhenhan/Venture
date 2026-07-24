@@ -122,7 +122,7 @@ const MdCode = ({ node: _node, className, children, ...props }: any) => {
   if (isInline) {
     return (
       <code
-        className="bg-muted px-1.5 py-0.5 rounded text-foreground font-mono text-[0.9em]"
+        className="bg-muted px-1.5 py-0.5 rounded text-foreground font-mono text-[0.9em] break-all"
         {...props}
       >
         {children}
@@ -260,7 +260,7 @@ export const MarkdownContent = memo(function MarkdownContent({
     <TypingCtx.Provider value={isTyping}>
       <TextLenCtx.Provider value={textLen}>
         <div
-          className={`markdown-content text-[16px] leading-[1.7] tracking-tight text-foreground font-normal ${className}`}
+          className={`markdown-content min-w-0 text-[16px] leading-[1.7] tracking-tight text-foreground font-normal ${className}`}
         >
           <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MD_COMPONENTS}>
             {displayedText}

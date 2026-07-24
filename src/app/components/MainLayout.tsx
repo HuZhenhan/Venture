@@ -35,6 +35,7 @@ import {
   selectIsResizingEditor,
   selectShowTestButton,
   selectShowLayoutDebug,
+  selectIsRightRailOpen,
   useLayoutStore 
 } from '../store/useLayoutStore';
 import { AMBIENT_BG, RIGHT_RAIL_WIDTH, APPLE_CURVE, DURATION, PANEL_TRANSITION } from '../constants';
@@ -72,6 +73,7 @@ export function MainLayout() {
   const responsiveWidths = useLayoutStore(selectResponsiveLayout);
   const showTestButton = useLayoutStore(selectShowTestButton);
   const showLayoutDebug = useLayoutStore(selectShowLayoutDebug);
+  const isRightRailOpen = useLayoutStore(selectIsRightRailOpen);
 
   const handleResize = useCallback(() => {
     setViewportWidth(window.innerWidth);
@@ -130,7 +132,7 @@ export function MainLayout() {
   ]);
 
   const singlePagePanelShellClassName =
-    'absolute inset-y-0 right-0 h-full bg-background';
+    'absolute inset-y-0 left-0 h-full bg-background';
 
   useEffect(() => {
     syncPanelVisibility();
@@ -167,7 +169,7 @@ export function MainLayout() {
   if (isUsageOpen) usageEverOpenedRef.current = true;
 
   return (
-    <div className="flex flex-col h-screen w-full bg-background text-foreground font-sans overflow-hidden selection:bg-black/10 antialiased relative">
+    <div className="flex flex-col h-screen w-full bg-background text-foreground font-sans overflow-hidden selection:bg-black/10 antialiased relative" style={{ paddingTop: 'var(--safe-area-top)', paddingBottom: 'var(--safe-area-bottom)' }}>
       <div className="fixed inset-0 z-0 opacity-[0.08] pointer-events-none">
         <img src={AMBIENT_BG} alt="" className="w-full h-full object-cover" />
       </div>
@@ -224,13 +226,12 @@ export function MainLayout() {
         </div>
 
         <div className="flex-1 flex flex-col overflow-hidden relative">
-          <div style={{ marginRight: RIGHT_RAIL_WIDTH }}>
+          <div>
             <ChatHeader />
           </div>
           <motion.div 
           className="flex-1 flex overflow-hidden relative transform-gpu will-change-transform"
           initial={false}
-          style={{ marginRight: RIGHT_RAIL_WIDTH }}
           transition={{
             width: (isResizingSidebar || isResizingEditor) ? { duration: 0 } : PANEL_TRANSITION
           }}
@@ -319,11 +320,18 @@ export function MainLayout() {
             ) : null}
           </motion.div>
 
-          <div
-            className="absolute right-0 top-0 bottom-0 z-30 flex h-full shrink-0 border-l border-border bg-background"
-            style={{ width: RIGHT_RAIL_WIDTH }}
+          <motion.div
+            className={`absolute right-0 top-0 bottom-0 z-50 flex h-full shrink-0 bg-background overflow-hidden ${
+              isRightRailOpen ? 'border-l border-border shadow-[-12px_0_32px_-24px_rgba(0,0,0,0.3)]' : ''
+            }`}
+            initial={false}
+            animate={{
+              width: isRightRailOpen ? RIGHT_RAIL_WIDTH : 0,
+              pointerEvents: isRightRailOpen ? 'auto' : 'none',
+            }}
+            transition={PANEL_TRANSITION}
           >
-            <div className="sticky top-0 flex w-full pt-2">
+            <div className="sticky top-0 flex w-[56px] pt-2">
               <RightPanelRail
                 isChatActive={railState.chatActive}
                 isSettingsOpen={railState.settingsActive}
@@ -340,7 +348,7 @@ export function MainLayout() {
                 onToggleWorkflow={handleToggleWorkflow}
               />
             </div>
-          </div>
+          </motion.div>
         </div>
       </div>
 

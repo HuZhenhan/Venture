@@ -13,7 +13,7 @@ const codeBlockBase =
   "text-[11px] font-mono p-2.5 rounded-lg overflow-x-auto whitespace-pre-wrap break-all border transition-colors duration-500";
 
 const inlineCodeBase =
-  "font-mono px-1.5 py-0.5 rounded transition-colors duration-500";
+  "font-mono px-1.5 py-0.5 rounded transition-colors duration-500 break-all";
 
 export function getToolCardClasses(isExpanded: boolean) {
   return {

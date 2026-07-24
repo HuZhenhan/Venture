@@ -1,8 +1,8 @@
 import React, { ComponentType } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Sparkles, ShieldCheck, Eye } from "lucide-react";
+import { Sparkles, ShieldCheck, Eye, PanelRightOpen, PanelRightClose } from "lucide-react";
 import { useChatStore } from "../../store/useChatStore";
-import { selectResponsiveLayout, useLayoutStore } from "../../store/useLayoutStore";
+import { selectResponsiveLayout, selectIsRightRailOpen, selectToggleRightRail, useLayoutStore } from "../../store/useLayoutStore";
 import { APPLE_CURVE } from "../../constants";
 import { ChatMode } from "../../types";
 import CustomTitleBar from "../window/CustomTitleBar";
@@ -22,6 +22,8 @@ export function ChatHeader() {
   const isSidebarOpen = useLayoutStore(state => state.isSidebarOpen);
   const shouldUseSidebarOverlay = useLayoutStore((state) => selectResponsiveLayout(state).shouldUseSidebarOverlay);
   const isChatPushed = isSidebarOpen && !shouldUseSidebarOverlay;
+  const isRightRailOpen = useLayoutStore(selectIsRightRailOpen);
+  const toggleRightRail = useLayoutStore(selectToggleRightRail);
   const currentMode = chat?.mode || preSelectedMode;
   const dragRegionStyle = { WebkitAppRegion: 'drag' } as React.CSSProperties;
   const noDragRegionStyle = { WebkitAppRegion: 'no-drag' } as React.CSSProperties;
@@ -40,7 +42,7 @@ export function ChatHeader() {
       className="shrink-0 h-[52px] flex items-center pl-5 pr-0 z-20 bg-background/70 backdrop-blur-3xl border-b border-border"
     >
       {/* 左侧：spacer + 标题（不设 drag，避免拦截 toggle/测试按钮的点击） */}
-      <div className="flex items-center min-w-0 h-full shrink-0">
+      <div className="flex items-center min-w-0 h-full">
         <motion.div
           initial={false}
           animate={{
@@ -84,7 +86,7 @@ export function ChatHeader() {
                 whileTap={{ scale: 0.92 }}
                 key={m.id}
                 onClick={() => handleModeChange(m.id)}
-                className={`relative flex items-center gap-1.5 px-3 py-1 rounded-[9.5px] transition-colors duration-200 min-w-[64px] justify-center ${
+                className={`relative flex items-center gap-1.5 px-1.5 sm:px-3 py-1 rounded-[9.5px] transition-colors duration-200 min-w-0 sm:min-w-[64px] justify-center ${
                   isActive ? 'text-foreground' : 'text-muted-foreground hover:text-foreground'
                 }`}
               >
@@ -101,13 +103,34 @@ export function ChatHeader() {
                   />
                 )}
                 <Icon size={12} className="relative z-10" strokeWidth={2.4} />
-                <span className="relative z-10 text-[10px] font-bold tracking-wider uppercase">
+                <span className="relative z-10 text-[10px] font-bold tracking-wider uppercase hidden sm:inline">
                   {m.label}
                 </span>
               </motion.button>
             );
           })}
         </div>
+
+        <motion.button
+          whileTap={{ scale: 0.92 }}
+          type="button"
+          onClick={toggleRightRail}
+          aria-label={isRightRailOpen ? '收起右侧栏' : '展开右侧栏'}
+          aria-pressed={isRightRailOpen}
+          title={isRightRailOpen ? '收起右侧栏' : '展开右侧栏'}
+          className={`relative flex h-9 w-9 items-center justify-center rounded-xl transition-colors duration-200 shrink-0 ${
+            isRightRailOpen
+              ? 'bg-muted text-foreground'
+              : 'text-muted-foreground hover:bg-muted/50 hover:text-foreground'
+          }`}
+        >
+          {isRightRailOpen ? (
+            <PanelRightClose size={18} strokeWidth={2} />
+          ) : (
+            <PanelRightOpen size={18} strokeWidth={2} />
+          )}
+        </motion.button>
+
         {__IS_ELECTRON__ && <CustomTitleBar />}
       </div>
     </div>

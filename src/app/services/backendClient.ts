@@ -1,19 +1,50 @@
 const FALLBACK_BASE_URL = 'http://127.0.0.1:49527';
+const HEALTH_CHECK_MAX_RETRIES = 10;
+const HEALTH_CHECK_INTERVAL_MS = 500;
 
 let resolvedBaseUrl: string | null = null;
+let healthCheckPromise: Promise<string> | null = null;
 
 export async function getBackendBaseUrl(): Promise<string> {
   if (resolvedBaseUrl) return resolvedBaseUrl;
-  if (typeof window !== 'undefined' && window.desktopShell?.getBackendInfo) {
-    try {
-      const info = await window.desktopShell.getBackendInfo();
-      resolvedBaseUrl = info.baseUrl;
-      return resolvedBaseUrl;
-    } catch {
+
+  // 复用同一个健康检查 Promise，避免并发重复检测
+  if (healthCheckPromise) return healthCheckPromise;
+
+  healthCheckPromise = (async () => {
+    // Electron: 试用 desktopShell 获取后端信息
+    if (typeof window !== 'undefined' && window.desktopShell?.getBackendInfo) {
+      try {
+        const info = await window.desktopShell.getBackendInfo();
+        resolvedBaseUrl = info.baseUrl;
+        return resolvedBaseUrl;
+      } catch {
+        // fallback
+      }
     }
-  }
-  resolvedBaseUrl = FALLBACK_BASE_URL;
-  return resolvedBaseUrl;
+
+    const base = FALLBACK_BASE_URL;
+
+    // 等待后端就绪（重试机制处理竞态）
+    for (let i = 0; i < HEALTH_CHECK_MAX_RETRIES; i++) {
+      try {
+        const res = await fetch(`${base}/health`, { method: 'GET' });
+        if (res.ok) {
+          resolvedBaseUrl = base;
+          return resolvedBaseUrl;
+        }
+      } catch {
+        // 后端还没就绪，等待后重试
+      }
+      await new Promise((r) => setTimeout(r, HEALTH_CHECK_INTERVAL_MS));
+    }
+
+    // 所有重试都失败了，仍然返回 base URL（让调用方自己处理错误）
+    resolvedBaseUrl = base;
+    return resolvedBaseUrl;
+  })();
+
+  return healthCheckPromise;
 }
 
 export interface BackendError {

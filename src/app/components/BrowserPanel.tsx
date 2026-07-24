@@ -1,8 +1,8 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { RotateCw, ChevronLeft, ChevronRight, Globe } from 'lucide-react';
-import { DURATION } from '../constants';
+import { RotateCw, ChevronLeft, ChevronRight, Globe, ExternalLink } from 'lucide-react';
+import { DURATION, RIGHT_RAIL_WIDTH } from '../constants';
 import { BrowserSummaryPanel } from './BrowserSummaryPanel';
-import { useLayoutStore, selectIsBrowserSummaryOpen, selectSetIsBrowserSummaryOpen } from '../store/useLayoutStore';
+import { useLayoutStore, selectIsBrowserSummaryOpen, selectSetIsBrowserSummaryOpen, selectIsRightRailOpen } from '../store/useLayoutStore';
 
 const DEFAULT_URL = 'https://www.bing.com';
 const NATIVE_BROWSER_RESTORE_DELAY_MS = Math.ceil(DURATION.panel * 1000) + 80;
@@ -82,25 +82,106 @@ export const BrowserPanel: React.FC<BrowserPanelProps> = ({
   const [isNativeViewReady, setIsNativeViewReady] = useState(false);
   const [isSummaryPreviewRunning, setIsSummaryPreviewRunning] = useState(false);
   const [summary, setSummary] = useState<BrowserSummary | null>(null);
+  const [iframeBlocked, setIframeBlocked] = useState(false);
   const viewportRef = useRef<HTMLDivElement>(null);
   const syncAnimationFrameRef = useRef<number | null>(null);
   const nativeRestoreTimeoutRef = useRef<number | null>(null);
+  const callbackIdCounterRef = useRef(0);
+
   const isElectronBrowser = __IS_ELECTRON__ && !!window.desktopShell;
-  const shouldPrepareNativeBrowser = isElectronBrowser && isOpen && !isNativeViewHidden;
+  const isAndroidBrowser = !__IS_ELECTRON__ && !!window.BrowserBridge;
+  const hasNativeBrowser = isElectronBrowser || isAndroidBrowser;
+  const shouldPrepareNativeBrowser = hasNativeBrowser && isOpen && !isNativeViewHidden;
   const shouldShowNativeBrowser = shouldPrepareNativeBrowser && isNativeViewReady;
 
   const isBrowserSummaryOpen = useLayoutStore(selectIsBrowserSummaryOpen);
   const setIsBrowserSummaryOpen = useLayoutStore(selectSetIsBrowserSummaryOpen);
+  const isRightRailOpen = useLayoutStore(selectIsRightRailOpen);
+  const viewportWidth = useLayoutStore((state) => state.viewportWidth);
 
-  // 用 ref 跟踪摘要面板状态，避免改变 syncBounds 的依赖而触发 effect 重建。
   const isBrowserSummaryOpenRef = useRef(isBrowserSummaryOpen);
   isBrowserSummaryOpenRef.current = isBrowserSummaryOpen;
 
+  // ── Android 端：设置摘要回调接收器 ──────────────────────────
+  useEffect(() => {
+    if (!isAndroidBrowser) return;
+
+    // 初始化回调存储
+    window.__browser_summary_callbacks = window.__browser_summary_callbacks || {};
+
+    // Kotlin 完成提取后通过 evaluateJavascript 调用此函数
+    window.__browser_summary_result = (callbackId: string, summary: BrowserSummary) => {
+      const cb = window.__browser_summary_callbacks?.[callbackId];
+      if (cb) {
+        delete window.__browser_summary_callbacks![callbackId];
+        cb.resolve(summary);
+      }
+    };
+
+    return () => {
+      delete window.__browser_summary_result;
+    };
+  }, [isAndroidBrowser]);
+
+  // ── Android 端：监听原生浏览器状态变化 ──────────────────────
+  useEffect(() => {
+    if (!isAndroidBrowser) return;
+
+    const handleState = (e: Event) => {
+      const detail = (e as CustomEvent).detail as NativeBrowserState;
+      setInputUrl(detail.url || DEFAULT_URL);
+      setCurrentUrl(detail.url || DEFAULT_URL);
+      setCanGoBack(detail.canGoBack);
+      setCanGoForward(detail.canGoForward);
+      setIsLoading(detail.isLoading);
+      setNativeError(detail.error ?? null);
+    };
+
+    window.addEventListener('browser-state', handleState);
+    return () => window.removeEventListener('browser-state', handleState);
+  }, [isAndroidBrowser]);
+
+  // ── Electron 端：监听原生浏览器状态 ─────────────────────────
+  useEffect(() => {
+    if (!isElectronBrowser) return;
+    return window.desktopShell?.onBrowserState((state) => {
+      setInputUrl(state.url || DEFAULT_URL);
+      setCurrentUrl(state.url || DEFAULT_URL);
+      setCanGoBack(state.canGoBack);
+      setCanGoForward(state.canGoForward);
+      setIsLoading(state.isLoading);
+      setNativeError(state.error ?? null);
+    });
+  }, [isElectronBrowser]);
+
+  // ── 同步原生浏览器 bounds ──────────────────────────────────
   const syncBounds = useCallback(() => {
     if (!shouldShowNativeBrowser || !viewportRef.current) return;
-    if (isBrowserSummaryOpenRef.current) return; // 摘要面板打开时不恢复原生视图 bounds
-    window.desktopShell?.browserSetBounds(getElementBounds(viewportRef.current));
-  }, [shouldShowNativeBrowser]);
+    if (isBrowserSummaryOpenRef.current) return;
+
+    const rawBounds = getElementBounds(viewportRef.current);
+    const reservedRight = isRightRailOpen ? RIGHT_RAIL_WIDTH : 0;
+    const maxWidth = Math.max(viewportWidth - reservedRight - rawBounds.x, 0);
+    const clampedBounds = {
+      x: Math.max(0, rawBounds.x),
+      y: Math.max(0, rawBounds.y),
+      width: Math.min(Math.max(0, rawBounds.width), maxWidth),
+      height: Math.max(0, rawBounds.height),
+      visible: rawBounds.visible,
+    };
+
+    if (isElectronBrowser) {
+      window.desktopShell?.browserSetBounds(clampedBounds);
+    } else if (isAndroidBrowser) {
+      const dpr = window.devicePixelRatio || 1;
+      window.BrowserBridge?.setBounds(
+        clampedBounds.x * dpr,
+        clampedBounds.y * dpr,
+        clampedBounds.width * dpr,
+        clampedBounds.height * dpr,
+      );
+    }
+  }, [shouldShowNativeBrowser, isElectronBrowser, isAndroidBrowser, isRightRailOpen, viewportWidth]);
 
   const clearScheduledBoundsSync = useCallback(() => {
     if (syncAnimationFrameRef.current !== null) {
@@ -124,23 +205,27 @@ export const BrowserPanel: React.FC<BrowserPanelProps> = ({
     });
   }, [clearScheduledBoundsSync, syncBounds]);
 
+  // ── 导航 ───────────────────────────────────────────────────
   const navigate = useCallback((url: string) => {
     const target = normalizeUrl(url);
     setInputUrl(target);
     setCurrentUrl(target);
     setNativeError(null);
     setIsLoading(true);
+    setIframeBlocked(false);
 
-    if (!isElectronBrowser) {
+    if (isElectronBrowser) {
+      window.desktopShell?.browserNavigate(target).catch((err) => {
+        setNativeError(err instanceof Error ? err.message : String(err));
+        setIsLoading(false);
+      });
+    } else if (isAndroidBrowser) {
+      window.BrowserBridge?.navigate(target);
+    } else {
+      // Fallback: try iframe, or just update UI state
       setIsLoading(false);
-      return;
     }
-
-    window.desktopShell?.browserNavigate(target).catch((err) => {
-      setNativeError(err instanceof Error ? err.message : String(err));
-      setIsLoading(false);
-    });
-  }, [isElectronBrowser]);
+  }, [isElectronBrowser, isAndroidBrowser]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -150,58 +235,84 @@ export const BrowserPanel: React.FC<BrowserPanelProps> = ({
   );
 
   const handleRefresh = useCallback(() => {
-    if (!isElectronBrowser) return;
-    setIsLoading(true);
-    window.desktopShell?.browserReload();
-  }, [isElectronBrowser]);
+    if (isElectronBrowser) {
+      setIsLoading(true);
+      window.desktopShell?.browserReload();
+    } else if (isAndroidBrowser) {
+      window.BrowserBridge?.reload();
+    }
+  }, [isElectronBrowser, isAndroidBrowser]);
 
   const handleBack = useCallback(() => {
     if (isElectronBrowser) window.desktopShell?.browserBack();
-  }, [isElectronBrowser]);
+    else if (isAndroidBrowser) window.BrowserBridge?.goBack();
+  }, [isElectronBrowser, isAndroidBrowser]);
 
   const handleForward = useCallback(() => {
     if (isElectronBrowser) window.desktopShell?.browserForward();
-  }, [isElectronBrowser]);
+    else if (isAndroidBrowser) window.BrowserBridge?.goForward();
+  }, [isElectronBrowser, isAndroidBrowser]);
 
+  // ── 页面摘要提取 ───────────────────────────────────────────
   const handleSummaryPreview = useCallback(async () => {
-    if (!isElectronBrowser || !shouldShowNativeBrowser || isSummaryPreviewRunning) return;
+    if (!hasNativeBrowser || !shouldShowNativeBrowser || isSummaryPreviewRunning) return;
 
     setNativeError(null);
     setIsSummaryPreviewRunning(true);
+
     try {
-      const result = await window.desktopShell?.browserSummarizePreview();
-      if (result) {
-        setSummary(result);
-        if (result.status === 'failed') {
-          setNativeError(result.error || '摘取失败');
-        } else {
-          setIsBrowserSummaryOpen(true);
-        }
+      if (isElectronBrowser) {
+        const result = await window.desktopShell?.browserSummarizePreview();
+        if (result) processSummaryResult(result);
+      } else if (isAndroidBrowser) {
+        const callbackId = 'sum-' + (++callbackIdCounterRef.current).toString(36) + '-' + Date.now().toString(36);
+        const promise = new Promise<BrowserSummary>((resolve, reject) => {
+          window.__browser_summary_callbacks![callbackId] = { resolve, reject };
+          // 超时 30s
+          setTimeout(() => {
+            const cb = window.__browser_summary_callbacks?.[callbackId];
+            if (cb) {
+              delete window.__browser_summary_callbacks![callbackId];
+              cb.reject(new Error('摘取超时'));
+            }
+          }, 30000);
+        });
+        window.BrowserBridge?.summarize(callbackId);
+        const result = await promise;
+        processSummaryResult(result);
       }
     } catch (err) {
       setNativeError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsSummaryPreviewRunning(false);
     }
-  }, [isElectronBrowser, isSummaryPreviewRunning, setIsBrowserSummaryOpen, shouldShowNativeBrowser]);
+  }, [hasNativeBrowser, isSummaryPreviewRunning, setIsBrowserSummaryOpen, shouldShowNativeBrowser, isElectronBrowser, isAndroidBrowser]);
+
+  const processSummaryResult = useCallback((result: BrowserSummary) => {
+    setSummary(result);
+    if (result.status === 'failed') {
+      setNativeError(result.error || '摘取失败');
+    } else {
+      setIsBrowserSummaryOpen(true);
+    }
+  }, [setIsBrowserSummaryOpen]);
 
   const handleCloseSummary = useCallback(() => {
     setIsBrowserSummaryOpen(false);
   }, [setIsBrowserSummaryOpen]);
 
+  // ── 打开外部浏览器 ─────────────────────────────────────────
+  const handleOpenExternal = useCallback(() => {
+    if (isAndroidBrowser) {
+      window.BrowserBridge?.openExternal(currentUrl);
+    } else {
+      window.open(currentUrl, '_blank', 'noopener,noreferrer');
+    }
+  }, [isAndroidBrowser, currentUrl]);
+
+  // ── 原生视图生命周期：Electron ─────────────────────────────
   useEffect(() => {
     if (!isElectronBrowser) return;
-    return window.desktopShell?.onBrowserState((state) => {
-      setInputUrl(state.url || DEFAULT_URL);
-      setCurrentUrl(state.url || DEFAULT_URL);
-      setCanGoBack(state.canGoBack);
-      setCanGoForward(state.canGoForward);
-      setIsLoading(state.isLoading);
-      setNativeError(state.error ?? null);
-    });
-  }, [isElectronBrowser]);
-
-  useEffect(() => {
     clearNativeRestoreTimer();
 
     if (!shouldPrepareNativeBrowser) {
@@ -217,25 +328,74 @@ export const BrowserPanel: React.FC<BrowserPanelProps> = ({
     }, NATIVE_BROWSER_RESTORE_DELAY_MS);
 
     return clearNativeRestoreTimer;
-  }, [clearNativeRestoreTimer, shouldPrepareNativeBrowser]);
+  }, [clearNativeRestoreTimer, isElectronBrowser, shouldPrepareNativeBrowser]);
 
+  // ── 原生视图生命周期：Android ──────────────────────────────
   useEffect(() => {
-    if (!shouldShowNativeBrowser || !viewportRef.current) {
-      window.desktopShell?.browserHide();
+    if (!isAndroidBrowser) return;
+
+    if (!shouldPrepareNativeBrowser) {
+      setIsNativeViewReady(false);
+      window.BrowserBridge?.hide();
       return;
     }
 
-    const openNativeBrowser = () => {
-      const bounds = viewportRef.current ? getElementBounds(viewportRef.current) : undefined;
-      if (!bounds) return;
-      if (isBrowserSummaryOpenRef.current) return; // 摘要面板打开时不要显示原生视图
-      window.desktopShell?.browserOpen({ url: currentUrl, bounds }).catch((err) => {
-        setNativeError(err instanceof Error ? err.message : String(err));
-        setIsLoading(false);
-      });
+    setIsNativeViewReady(true);
+    return () => {
+      window.BrowserBridge?.hide();
     };
+  }, [isAndroidBrowser, shouldPrepareNativeBrowser]);
 
-    openNativeBrowser();
+  // ── 保险：isOpen 或 isNativeViewHidden 变为 false 时强制隐藏 ──
+  useEffect(() => {
+    if (!isAndroidBrowser) return;
+    if (!isOpen || isNativeViewHidden) {
+      window.BrowserBridge?.hide();
+    }
+  }, [isAndroidBrowser, isOpen, isNativeViewHidden]);
+
+  // ── 页面切后台 / 锁屏时隐藏浏览器 ──────────────────────────
+  useEffect(() => {
+    if (!isAndroidBrowser) return;
+    const handleVisibility = () => {
+      if (document.hidden) window.BrowserBridge?.hide();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [isAndroidBrowser]);
+
+  // ── 打开原生视图 ───────────────────────────────────────────
+  useEffect(() => {
+    if (!shouldShowNativeBrowser || !viewportRef.current) {
+      if (!hasNativeBrowser) return;
+      if (isElectronBrowser) window.desktopShell?.browserHide();
+      else if (isAndroidBrowser) window.BrowserBridge?.hide();
+      return;
+    }
+
+    if (isElectronBrowser) {
+      const openNativeBrowser = () => {
+        const bounds = viewportRef.current ? getElementBounds(viewportRef.current) : undefined;
+        if (!bounds) return;
+        if (isBrowserSummaryOpenRef.current) return;
+        window.desktopShell?.browserOpen({ url: currentUrl, bounds }).catch((err) => {
+          setNativeError(err instanceof Error ? err.message : String(err));
+          setIsLoading(false);
+        });
+      };
+      openNativeBrowser();
+    } else if (isAndroidBrowser && viewportRef.current) {
+      const bounds = getElementBounds(viewportRef.current);
+      const dpr = window.devicePixelRatio || 1;
+      window.BrowserBridge?.open(
+        currentUrl,
+        bounds.x * dpr,
+        bounds.y * dpr,
+        bounds.width * dpr,
+        bounds.height * dpr,
+      );
+    }
+
     scheduleBoundsSync();
     const resizeObserver = new ResizeObserver(syncBounds);
     resizeObserver.observe(viewportRef.current);
@@ -245,64 +405,79 @@ export const BrowserPanel: React.FC<BrowserPanelProps> = ({
       clearScheduledBoundsSync();
       resizeObserver.disconnect();
       window.removeEventListener('resize', syncBounds);
-      window.desktopShell?.browserHide();
+      if (isElectronBrowser) window.desktopShell?.browserHide();
+      else if (isAndroidBrowser) window.BrowserBridge?.hide();
     };
-  }, [clearScheduledBoundsSync, currentUrl, scheduleBoundsSync, shouldShowNativeBrowser, syncBounds]);
+  }, [clearScheduledBoundsSync, currentUrl, hasNativeBrowser, isAndroidBrowser, isElectronBrowser, scheduleBoundsSync, shouldShowNativeBrowser, syncBounds]);
 
-  // 摘要面板打开时隐藏原生浏览器视图（HTML 覆盖层才能露出来），关闭时恢复 bounds。
+  // ── 摘要面板：隐藏/恢复原生视图 ────────────────────────────
   useEffect(() => {
     if (!shouldShowNativeBrowser) return;
     if (isBrowserSummaryOpen) {
-      window.desktopShell?.browserHide();
+      if (isElectronBrowser) window.desktopShell?.browserHide();
+      else if (isAndroidBrowser) window.BrowserBridge?.hide();
     } else if (viewportRef.current) {
-      window.desktopShell?.browserSetBounds(getElementBounds(viewportRef.current));
+      syncBounds();
     }
-  }, [isBrowserSummaryOpen, shouldShowNativeBrowser]);
+  }, [isBrowserSummaryOpen, isAndroidBrowser, isElectronBrowser, shouldShowNativeBrowser, syncBounds]);
 
+  // ── 右栏切换后，等动画完成再同步原生浏览器边界 ──────────
+  // 右侧栏展开/收起有 550ms 动画，期间 DOM 尺寸在变化；
+  // ResizeObserver 会逐步触发，但保险起见在动画结束后再同步一次。
   useEffect(() => {
-    syncBounds();
-  });
+    const delay = Math.ceil(DURATION.panel * 1000) + 100;
+    const timer = setTimeout(syncBounds, delay);
+    return () => clearTimeout(timer);
+  }, [isRightRailOpen, syncBounds]);
+
+  // ── iframe 加载检测 ─────────────────────────────────────────
+  const handleIframeError = useCallback(() => {
+    setIframeBlocked(true);
+  }, []);
 
   if (!isOpen) return null;
 
   return (
     <div className="flex h-full w-full flex-col bg-background overflow-hidden">
-      <div className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-1.5">
-        <button
-          type="button"
-          onClick={handleBack}
-          aria-label="后退"
-          disabled={!isElectronBrowser || !canGoBack}
-          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-35"
-        >
-          <ChevronLeft size={15} />
-        </button>
-        <button
-          type="button"
-          onClick={handleForward}
-          aria-label="前进"
-          disabled={!isElectronBrowser || !canGoForward}
-          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-35"
-        >
-          <ChevronRight size={15} />
-        </button>
-        <button
-          type="button"
-          onClick={handleRefresh}
-          aria-label="刷新"
-          disabled={!isElectronBrowser}
-          className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-35"
-          style={isLoading ? { animation: 'spin 0.8s linear infinite' } : undefined}
-        >
-          <RotateCw size={14} />
-        </button>
+      {/* 工具栏 */}
+      <div className="flex shrink-0 items-center gap-1 border-b border-border pl-0 pr-2 py-1.5">
+        <div className="flex items-center gap-0 shrink-0">
+          <button
+            type="button"
+            onClick={handleBack}
+            aria-label="后退"
+            disabled={!hasNativeBrowser || !canGoBack}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-35"
+          >
+            <ChevronLeft size={15} />
+          </button>
+          <button
+            type="button"
+            onClick={handleForward}
+            aria-label="前进"
+            disabled={!hasNativeBrowser || !canGoForward}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-35"
+          >
+            <ChevronRight size={15} />
+          </button>
+          <button
+            type="button"
+            onClick={handleRefresh}
+            aria-label="刷新"
+            disabled={!hasNativeBrowser}
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-35"
+            style={isLoading ? { animation: 'spin 0.8s linear infinite' } : undefined}
+          >
+            <RotateCw size={14} />
+          </button>
+        </div>
         <input
           type="text"
           value={inputUrl}
           onChange={(e) => setInputUrl(e.target.value)}
           onKeyDown={handleKeyDown}
           aria-label="地址栏"
-          className="h-7 flex-1 rounded-md border border-border bg-muted/30 px-2.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring transition-colors"
+          className="h-7 flex-1 min-w-0 rounded-md border border-border bg-muted/30 px-2.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring transition-colors truncate"
           spellCheck={false}
           autoComplete="off"
         />
@@ -311,8 +486,20 @@ export const BrowserPanel: React.FC<BrowserPanelProps> = ({
           disabled={!shouldShowNativeBrowser || isLoading || isSummaryPreviewRunning}
           onClick={handleSummaryPreview}
         />
+        {iframeBlocked && (
+          <button
+            type="button"
+            onClick={handleOpenExternal}
+            aria-label="在系统浏览器打开"
+            title="在系统浏览器打开"
+            className="flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+          >
+            <ExternalLink size={14} />
+          </button>
+        )}
       </div>
 
+      {/* 视图区域 */}
       <div ref={viewportRef} className="relative flex-1 overflow-hidden bg-white">
         {isLoading && (
           <div
@@ -320,6 +507,8 @@ export const BrowserPanel: React.FC<BrowserPanelProps> = ({
             style={{ animation: 'browser-progress 1.4s ease-in-out forwards' }}
           />
         )}
+
+        {/* Electron: 原生浏览器恢复中 */}
         {isElectronBrowser && shouldPrepareNativeBrowser && !isNativeViewReady && (
           <div className="flex h-full w-full items-center justify-center bg-background px-8 text-center">
             <div className="rounded-2xl border border-border bg-muted/20 px-5 py-4 text-xs font-medium text-muted-foreground shadow-sm">
@@ -327,24 +516,32 @@ export const BrowserPanel: React.FC<BrowserPanelProps> = ({
             </div>
           </div>
         )}
-        {!isElectronBrowser && (
-          <div className="flex h-full w-full items-center justify-center bg-background px-8 text-center">
-            <div className="max-w-[360px] rounded-2xl border border-border bg-muted/20 p-5 shadow-sm">
-              <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                <Globe size={18} />
-              </div>
-              <h3 className="mt-4 text-sm font-semibold text-foreground">内置浏览器需要桌面端</h3>
-              <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                BrowserView 运行在 Electron 主进程中，普通 Web 预览不会创建原生 Chromium 视图。
-              </p>
-            </div>
+
+        {/* 无原生浏览器时，使用 iframe 或显示提示 */}
+        {!hasNativeBrowser && !isLoading && (
+          <iframe
+            src={currentUrl}
+            className="h-full w-full border-0"
+            title="网页浏览"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            onError={handleIframeError}
+          />
+        )}
+
+        {(nativeError || iframeBlocked) && (
+          <div className="absolute bottom-4 left-4 right-4 rounded-lg border border-destructive/30 bg-background/95 px-3 py-2 text-xs text-destructive shadow-sm flex items-center gap-2">
+            <span className="flex-1 truncate">{nativeError || '页面无法在内置浏览器中加载'}</span>
+            <button
+              type="button"
+              onClick={handleOpenExternal}
+              className="shrink-0 rounded-md bg-primary/10 px-2 py-1 text-xs text-primary hover:bg-primary/20 transition-colors"
+            >
+              外部浏览器打开
+            </button>
           </div>
         )}
-        {nativeError && (
-          <div className="absolute bottom-4 left-4 right-4 rounded-lg border border-destructive/30 bg-background/95 px-3 py-2 text-xs text-destructive shadow-sm">
-            {nativeError}
-          </div>
-        )}
+
+        {/* 摘要面板 */}
         {isBrowserSummaryOpen && (
           <div className="absolute inset-0 z-20 bg-background">
             {summary ? (

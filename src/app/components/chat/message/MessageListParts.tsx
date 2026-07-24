@@ -664,7 +664,7 @@ export const MessageItem = memo(function MessageItem({
       onMouseMove={handleMouseMove}
       onMouseLeave={handleMouseLeave}
     >
-      <div className={`w-full max-w-[85%] ${message.role === 'user' ? 'text-right' : 'text-left'}`}>
+      <div className={`w-full max-w-[85%] min-w-0 ${message.role === 'user' ? 'text-right' : 'text-left'}`}>
         <div className={`mb-2 flex items-center gap-2 opacity-30 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
           <span className="block min-h-[1.2em] text-[11px] font-medium uppercase tracking-widest">
             {message.role === 'user' ? 'You' : 'Neural Core'}

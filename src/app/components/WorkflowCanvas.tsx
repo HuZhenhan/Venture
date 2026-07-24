@@ -126,6 +126,8 @@ export const WorkflowCanvas = React.memo(function WorkflowCanvas() {
   const [isPanning, setIsPanning] = useState(false);
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [offsetStart, setOffsetStart] = useState({ x: 0, y: 0 });
+  // 触摸双指缩放状态
+  const pinchRef = useRef<{ prevDist: number; prevZoom: number; prevOffsetX: number; prevOffsetY: number } | null>(null);
 
   const nodes = MOCK_NODES;
   const edges = MOCK_EDGES;
@@ -220,6 +222,100 @@ export const WorkflowCanvas = React.memo(function WorkflowCanvas() {
     [zoom, offset]
   );
 
+  // ── 触摸事件（移动端单指拖拽 + 双指缩放）─────────────────────────
+  // 使用 ref 跟踪最新值，避免 touchmove 高速事件中闭包捕获到过时的 state
+
+  const zoomRef = useRef(zoom);
+  const offsetRef = useRef(offset);
+  useEffect(() => { zoomRef.current = zoom; }, [zoom]);
+  useEffect(() => { offsetRef.current = offset; }, [offset]);
+
+  const getTouchDistance = (touches: React.TouchList) => {
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  };
+
+  const handleTouchStart = useCallback(
+    (e: React.TouchEvent) => {
+      const target = e.target as HTMLElement;
+      if (target.closest('button')) return;
+
+      if (e.touches.length === 1) {
+        const t = e.touches[0];
+        setIsPanning(true);
+        setPanStart({ x: t.clientX, y: t.clientY });
+        setOffsetStart({ x: offsetRef.current.x, y: offsetRef.current.y });
+        pinchRef.current = null;
+      } else if (e.touches.length === 2) {
+        // 双指缩放：记录上一帧的 dist/zoom/offset，后续增量递推
+        setIsPanning(false);
+        const dist = getTouchDistance(e.touches);
+        pinchRef.current = {
+          dist: 0,  // 占位，handleTouchMove 首次会按 ratio=1 计算
+          zoom: zoomRef.current,
+          cx: 0,
+          cy: 0,
+          prevDist: dist,
+          prevZoom: zoomRef.current,
+          prevOffsetX: offsetRef.current.x,
+          prevOffsetY: offsetRef.current.y,
+        };
+      }
+    },
+    []  // 只依赖 ref，无需 state 依赖
+  );
+
+  const handleTouchMove = useCallback(
+    (e: React.TouchEvent) => {
+      e.preventDefault();
+      if (e.touches.length === 1 && isPanning) {
+        const t = e.touches[0];
+        setOffset({
+          x: offsetStart.x + (t.clientX - panStart.x),
+          y: offsetStart.y + (t.clientY - panStart.y),
+        });
+      } else if (e.touches.length === 2 && pinchRef.current) {
+        const p = pinchRef.current;
+        const dist = getTouchDistance(e.touches);
+        const scale = dist / p.prevDist;  // 相对上一帧的缩放比
+        const newZoom = Math.min(Math.max(p.prevZoom * scale, MIN_ZOOM), MAX_ZOOM);
+
+        // 以当前两指中点为缩放中心
+        const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
+        const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2;
+
+        if (containerRef.current) {
+          const rect = containerRef.current.getBoundingClientRect();
+          const mx = cx - rect.left;
+          const my = cy - rect.top;
+          const zoomRatio = newZoom / p.prevZoom;  // 相对上一帧的 zoom 比
+          const newOffsetX = mx - (mx - p.prevOffsetX) * zoomRatio;
+          const newOffsetY = my - (my - p.prevOffsetY) * zoomRatio;
+
+          // 更新 ref 供下一帧使用（绕过 React state 异步更新延迟）
+          p.prevDist = dist;
+          p.prevZoom = newZoom;
+          p.prevOffsetX = newOffsetX;
+          p.prevOffsetY = newOffsetY;
+
+          setZoom(newZoom);
+          setOffset({ x: newOffsetX, y: newOffsetY });
+        } else {
+          p.prevDist = dist;
+          p.prevZoom = newZoom;
+          setZoom(newZoom);
+        }
+      }
+    },
+    [isPanning, panStart, offsetStart]
+  );
+
+  const handleTouchEnd = useCallback(() => {
+    setIsPanning(false);
+    pinchRef.current = null;
+  }, []);
+
   const zoomPercentage = Math.round(zoom * 100);
   const arrowSize = Math.max(4, 7 * zoom);
 
@@ -228,9 +324,12 @@ export const WorkflowCanvas = React.memo(function WorkflowCanvas() {
       ref={containerRef}
       aria-label="工作流画布"
       className="relative h-full w-full overflow-hidden bg-background select-none"
-      style={{ cursor: isPanning ? 'grabbing' : 'grab' }}
+      style={{ cursor: isPanning ? 'grabbing' : 'grab', touchAction: 'none' }}
       onMouseDown={handleMouseDown}
       onWheel={handleWheel}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
     >
       {/* Grid background */}
       <div
