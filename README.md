@@ -1,6 +1,6 @@
 # Venture GUI - AI Tool Desktop Application
 
-A modern, full-stack Electron desktop application for AI-powered code assistance and chat interface.
+A modern, full-stack Electron desktop application for AI-powered code assistance and chat interface.  
 Android移植版已创建，详情查看Android分支
 
 **[🗂️ 查看项目结构优化报告](./STRUCTURE_OPTIMIZATION_REPORT.md)** | **[📚 完整文档](./docs/README.md)** | **[🏗️ 项目架构](./docs/ARCHITECTURE.md)**
