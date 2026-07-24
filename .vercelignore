@@ -1,0 +1,10 @@
+node_modules
+build
+dist
+logs
+.git
+.trae
+.log
+.figma
+.cursor
+.dbg
