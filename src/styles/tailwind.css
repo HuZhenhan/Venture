@@ -1,0 +1,9 @@
+@import "tailwindcss" source(none);
+@source '../**/*.{js,ts,jsx,tsx}';
+
+@import "tw-animate-css";
+
+/* Electron 无边框窗口：标记不可拖拽区域，防止标题栏 drag region 拦截点击 */
+.no-drag {
+  -webkit-app-region: no-drag;
+}
