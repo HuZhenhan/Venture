@@ -27,6 +27,10 @@ pub enum AppError {
     ConfigDecryptFailed,
     #[error("CONFIG_WRITE_FAILED: {0}")]
     ConfigWriteFailed(String),
+    #[error("TOOL_EXECUTION_ERROR: {0}")]
+    ToolExecutionError(String),
+    #[error("TASK_NOT_FOUND")]
+    TaskNotFound,
     #[error("INTERNAL_ERROR: {0}")]
     Internal(String),
 }
@@ -44,6 +48,8 @@ impl AppError {
             AppError::UpstreamStreamError(_) => "UPSTREAM_STREAM_ERROR",
             AppError::ConfigDecryptFailed => "CONFIG_DECRYPT_FAILED",
             AppError::ConfigWriteFailed(_) => "CONFIG_WRITE_FAILED",
+            AppError::ToolExecutionError(_) => "TOOL_EXECUTION_ERROR",
+            AppError::TaskNotFound => "TASK_NOT_FOUND",
             AppError::Internal(_) => "INTERNAL_ERROR",
         }
     }
@@ -59,6 +65,8 @@ impl AppError {
             AppError::UpstreamStreamError(msg) => format!("流处理错误: {}", msg),
             AppError::ConfigDecryptFailed => "配置解密失败。配置文件可能已损坏。".to_string(),
             AppError::ConfigWriteFailed(msg) => format!("配置保存失败: {}", msg),
+            AppError::ToolExecutionError(msg) => format!("工具执行失败: {}", msg),
+            AppError::TaskNotFound => "指定的任务未找到。".to_string(),
             AppError::BackendNotReady => "后端服务未就绪。".to_string(),
             AppError::Internal(msg) => format!("内部错误: {}", msg),
         }
@@ -70,8 +78,8 @@ impl AppError {
 
     pub fn http_status(&self) -> StatusCode {
         match self {
-            AppError::ProviderNotFound | AppError::ModelNotFound => StatusCode::NOT_FOUND,
-            AppError::InvalidProviderConfig(_) => StatusCode::BAD_REQUEST,
+            AppError::ProviderNotFound | AppError::ModelNotFound | AppError::TaskNotFound => StatusCode::NOT_FOUND,
+            AppError::InvalidProviderConfig(_) | AppError::ToolExecutionError(_) => StatusCode::BAD_REQUEST,
             AppError::UpstreamAuthFailed => StatusCode::UNAUTHORIZED,
             AppError::UpstreamRateLimited => StatusCode::TOO_MANY_REQUESTS,
             AppError::UpstreamTimeout => StatusCode::GATEWAY_TIMEOUT,

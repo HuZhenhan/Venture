@@ -33,6 +33,10 @@ futures-util = "0.3"
 bytes = "1"
 async-stream = "0.3"
 url = "2"
+# 工具调用相关依赖：glob 文件模式匹配 / regex 内容搜索 / walkdir 递归遍历
+glob = "0.3"
+regex = "1"
+walkdir = "2"
 
 [profile.release]
 opt-level = 3

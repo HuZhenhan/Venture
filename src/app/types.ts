@@ -69,6 +69,20 @@ export interface AskForm {
   };
 }
 
+export type ToolCallStatus = 'pending' | 'running' | 'completed' | 'failed' | 'needs_user_input';
+
+export interface ToolCall {
+  id: string;
+  name: string;
+  /** 已解析的工具输入参数（JSON 对象）。 */
+  input: unknown;
+  status: ToolCallStatus;
+  /** 工具执行输出，状态为 completed/failed 时存在。 */
+  output?: string;
+  /** 后端返回的结构化数据（如任务对象），可选。 */
+  structured?: unknown;
+}
+
 export interface SearchOp {
   id: string;
   type: 'file' | 'code';
@@ -162,7 +176,34 @@ export interface BrowserSummary {
   error?: string;
 }
 
-export type ContentBlock = 
+export interface TraceRecord {
+  id: string;
+  timestamp: number;
+  chatId: string;
+  request: {
+    url: string;
+    method: string;
+    headers: Record<string, string>;
+    body: unknown;
+  };
+  response: {
+    rawEvents: unknown[];
+  };
+  /** 后端→供应商 的上游请求和原始响应事件（仅在 traceUpstream 模式开启时填充） */
+  upstream?: {
+    request: {
+      url: string;
+      method: string;
+      headers: Record<string, string>;
+      body: unknown;
+    };
+    response: {
+      rawEvents: unknown[];
+    };
+  };
+}
+
+export type ContentBlock =
   | { type: 'text', content: string }
   | { type: 'reasoning', content: string, status?: 'reasoning' | 'done', title?: string }
   | { type: 'tasks', tasks: Task[], id: string }
@@ -174,16 +215,31 @@ export type ContentBlock =
   | { type: 'web_search', search: WebSearch }
   | { type: 'ask', ask: AskForm }
   | { type: 'search_op', searchOp: SearchOp }
-  | { type: 'browser_summary', summary: BrowserSummary };
+  | { type: 'browser_summary', summary: BrowserSummary }
+  | { type: 'tool_call', tool: ToolCall };
+
+/** 消息的时序分段，保证按生成顺序渲染（reasoning → content → tool_calls 交替）。 */
+export type MessageSegment =
+  | { type: 'reasoning'; content: string }
+  | { type: 'content'; content: string }
+  | { type: 'tool_calls'; calls: ToolCall[] };
 
 export interface Message {
   id: string;
   role: 'user' | 'ai';
-  content: string; // Keep this as full content for simple rendering if needed
+  content: string;
+  /** 推理/思考内容（所有轮次拼接），用于标题生成等。 */
+  reasoning?: string;
+  /** 推理标题，由标题生成服务填充。 */
+  reasoningTitle?: string;
+  /** 时序分段列表，按 streaming 实际到达顺序记录，用于渲染。 */
+  segments?: MessageSegment[];
   rawResponse?: string;
   blocks?: ContentBlock[];
   status?: 'loading' | 'reasoning' | 'typing' | 'done';
   usage?: TokenUsage;
+  /** Tool calls from assistant messages (OpenAI-native format). */
+  toolCalls?: ToolCall[];
 }
 
 export interface TokenUsage {

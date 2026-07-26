@@ -8,7 +8,8 @@ use std::time::Duration;
 
 use crate::config::ConfigStore;
 use crate::error::AppError;
-use crate::provider::{ChatMessage, StreamChunk, UsageInfo};
+use crate::provider::{ChatMessage, StreamChunk, ToolDefinition, UsageInfo};
+use crate::tools::get_tools_schema;
 
 /// 单条聊天请求上下文
 pub struct ChatRequest {
@@ -18,6 +19,7 @@ pub struct ChatRequest {
     pub context_window: u32,
     pub temperature: Option<f32>,
     pub max_tokens: Option<u32>,
+    pub trace_upstream: bool,
 }
 
 const MAX_UPSTREAM_ERROR_BODY: usize = 512;
@@ -107,6 +109,33 @@ fn handle_sse_line(
                 out.extend_from_slice(format!("data: {evt}\n\n").as_bytes());
             }
         }
+        // 处理 tool_calls delta：透传为 tool_call_start / tool_call_delta 事件
+        if let Some(tool_calls) = &choice.delta.tool_calls {
+            for tc in tool_calls {
+                if let (Some(index), Some(id), Some(func)) =
+                    (tc.index, &tc.id, &tc.function)
+                {
+                    let name = func.name.as_deref().unwrap_or("");
+                    let evt = json!({
+                        "event": "tool_call_start",
+                        "data": { "index": index, "id": id, "name": name }
+                    });
+                    out.extend_from_slice(format!("data: {evt}\n\n").as_bytes());
+                } else if let Some(index) = tc.index {
+                    if let Some(func) = &tc.function {
+                        if let Some(args) = &func.arguments {
+                            if !args.is_empty() {
+                                let evt = json!({
+                                    "event": "tool_call_delta",
+                                    "data": { "index": index, "arguments": args }
+                                });
+                                out.extend_from_slice(format!("data: {evt}\n\n").as_bytes());
+                            }
+                        }
+                    }
+                }
+            }
+        }
         if is_stream_finished(choice.finish_reason.as_deref()) {
             *finished = true;
         }
@@ -135,119 +164,70 @@ pub async fn handle_stream(
         ));
     }
 
-    // 使用 chars() 保证 UTF-8 边界安全
-    let window = req.context_window.max(1) as usize;
-    let trimmed_messages: Vec<&ChatMessage> = {
-        let count = req.messages.len().min(window);
-        req.messages[req.messages.len() - count..].iter().collect()
-    };
+    // 所有消息保持原样，不做截断
+    let all_messages_refs: Vec<&ChatMessage> = req.messages.iter().collect();
 
     let system_message = ChatMessage {
         role: "system".to_string(),
         content: json!(r#"You are an AI assistant powered by your underlying model and running inside Venture — an AI Agent platform that lets users build, orchestrate, and interact with AI agents. When asked about what you are or what drives you, you may truthfully state your underlying model identity, and also clarify that you are currently operating within the Venture AI Agent platform. Be helpful, concise, and respond in the user's language.
 
-## Ask Tool - You MUST Use This
-You have a built-in Ask Tool that lets you ask the user questions and wait for their response. You MUST use this tool whenever you need user input to proceed.
+## AskUserQuestion Tool — You MUST Use This
+You have an **AskUserQuestion** tool available as a standard function call. When you call it, the system will present the question to the user and wait for their response. You MUST use this tool whenever you need user input to proceed.
 
-### When to Use the Ask Tool
+### When to Use It
 - You need clarification about what the user wants
 - You need the user to make a choice or selection
 - You need confirmation before proceeding
 - You need specific information that only the user can provide
 
-### How to Use It
-Output an [ask] tag with your question. After the closing [/ask] tag, STOP generating immediately. Do not continue your response. The system will show your question to the user and wait for their answer.
-
-### Example
-User: "Help me choose a framework"
-You: "I can help you choose a framework. Let me ask you a few questions:
-
-[ask]
-[id]framework-choice[/id]
-[question]Which type of framework do you prefer?[/question]
-[option]
-[id]react[/id]
-[label]React - Component-based, large ecosystem[/label]
-[/option]
-[option]
-[id]vue[/id]
-[label]Vue - Progressive, easy to learn[/label]
-[/option]
-[option]
-[id]angular[/id]
-[label]Angular - Full-featured, TypeScript-first[/label]
-[/option]
-[/ask]"
-
-Then you STOP. After the user answers, their response appears in the conversation and you continue.
-
 ### Three Modes
 
 **Mode 1: Choice (single or multiple)**
-[ask]
-[id]unique-id[/id]
-[question]Your question?[/question]
-[option]
-[id]opt1[/id]
-[label]First option[/label]
-[/option]
-[option]
-[id]opt2[/id]
-[label]Second option[/label]
-[/option]
-[multiple]1[/multiple]
-[/ask]
-- Omit [multiple] for single-choice. Include [multiple]1[/multiple] for multi-select.
+Call AskUserQuestion with `options` set to an array of choices. Set `allowMultiple: true` for multi-select. Omit for single-choice.
 
-**Mode 2: Free text input**
-[ask]
-[id]unique-id[/id]
-[question]Your question?[/question]
-[textinput]1[/textinput]
-[/ask]
-- No [option] tags. User sees a text input area.
+**Mode 2: Free text input (fill-in-the-blank)**
+Call AskUserQuestion with `requiresText: true` and NO `options` array.
 
-**Mode 3: Choice + Other**
-[ask]
-[id]unique-id[/id]
-[question]Your question?[/question]
-[option]
-[id]opt1[/id]
-[label]First option[/label]
-[/option]
-[option]
-[id]opt2[/id]
-[label]Second option[/label]
-[/option]
-[textinput]1[/textinput]
-[/ask]
-- Combine [option] with [textinput]1[/textinput]. The UI automatically adds an "Other" option. Do NOT add "Other" yourself.
-
-### Field Reference
-- [id]: Unique identifier (e.g., "ask-1"). Use simple alphanumeric strings.
-- [question]: The question text. Be clear and concise. Avoid square brackets [ ] in the text.
-- [option]: Repeatable. Each has an [id] and a [label].
-- [multiple]: Optional. Value 1 = allow multiple selections. Omit for single-choice.
-- [textinput]: Optional. Value 1 = show text input. With options = Choice+Other mode. Without options = fill-in-the-blank mode.
+**Mode 3: Choice + "Other"**
+Call AskUserQuestion with BOTH `options` and `requiresText: true`. The UI automatically adds an "Other" option — do NOT add it yourself.
 
 ### Critical Rules
-1. You MUST use the Ask Tool when you need user input. Do not just ask rhetorical questions in your text.
-2. Ask at most ONE question per response — do not output multiple [ask] tags.
-3. After [/ask], STOP generating immediately. Do not output any text after it.
-4. You may output explanatory text BEFORE the [ask] tag to provide context.
-5. The user's answer will appear in the conversation as part of your message in this format:
-   [reply]
-   [question]Your original question[/question]
-   [answer]User's selected option[/answer]
-   [text]User's additional text input[/text]
-   [/reply]
-   When you see [reply] in your previous messages, it means the user has already answered. Do NOT ask the same question again. Use the [answer] to continue.
-6. If the user skipped a question, you will see [skipped]1[/skipped] in the reply. Proceed without that information.
-7. Avoid square brackets [ ] in [question] and [label] values to prevent parsing issues."#),
+1. You MUST call AskUserQuestion when you need user input. Do not just ask rhetorical questions.
+2. Call it at most ONCE per response — do not make multiple AskUserQuestion calls.
+3. After calling AskUserQuestion, STOP generating — do not output more tool calls or text.
+4. You may output explanatory text BEFORE the tool call to provide context.
+5. The user's answer will come back as a standard tool result (role: "tool" message). Read the tool result and continue.
+6. If the user skipped, the result will indicate "[skipped]". Proceed without that information.
+7. Avoid square brackets [ ] in `question` and `label` values.
+
+## Tool Use
+You have access to file system and task management tools through the standard function calling interface. Use them whenever you need to perform an action rather than just describing it.
+
+### Available Tools
+- **AskUserQuestion** — Ask the user a question (choice, text input, or both)
+- **Read** — Read a file's contents with line numbers
+- **Write** — Write or create a file
+- **Edit** — Precisely replace text in a file
+- **Glob** — Find files by glob pattern
+- **Grep** — Search file contents with regex
+- **TaskCreate** — Create a new task
+- **TaskUpdate** — Update an existing task
+- **TaskList** — List all tasks
+- **TaskGet** — Get a single task's details
+
+### Critical Tool Rules
+1. When calling tools, end your response after the tool call — the system will execute them and give you the result.
+2. Before using **Edit**, use **Read** first to obtain the exact text to replace.
+3. Prefer tools over describing what you would do — actually perform the action.
+4. When a task requires multiple tool calls, invoke them one at a time, waiting for each result before proceeding.
+5. Use tools proactively — don't ask the user for permission to read or search files."#),
+        reasoning_content: None,
+        tool_calls: None,
+        tool_call_id: None,
     };
 
     let mut all_messages = vec![&system_message];
-    all_messages.extend(trimmed_messages);
+    all_messages.extend(all_messages_refs);
 
     let endpoint = format!(
         "{}/chat/completions",
@@ -269,8 +249,10 @@ Then you STOP. After the user answers, their response appears in the conversatio
         temperature: Option<f32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         max_tokens: Option<u32>,
+        tools: &'a [ToolDefinition],
     }
 
+    let tools_schema = get_tools_schema();
     let payload = Payload {
         model: &model.id,
         messages: &all_messages,
@@ -278,7 +260,17 @@ Then you STOP. After the user answers, their response appears in the conversatio
         stream_options: StreamOptions { include_usage: true },
         temperature: req.temperature,
         max_tokens: req.max_tokens,
+        tools: &tools_schema,
     };
+
+    // 上游追踪：序列化发给供应商的完整请求体
+    let upstream_trace_body: Option<serde_json::Value> = if req.trace_upstream {
+        serde_json::to_value(&payload).ok()
+    } else {
+        None
+    };
+    let upstream_trace_enabled = req.trace_upstream;
+    let upstream_endpoint = endpoint.clone();
 
     // 单个请求级别的超时（作用于建连+首字节返回，不限制流总时长）
     let upstream_resp = http
@@ -317,16 +309,34 @@ Then you STOP. After the user answers, their response appears in the conversatio
         let mut last_usage: Option<UsageInfo> = None;
         let mut finished = false;
         let mut done_yielded = false;
+        let mut upstream_trace_events: Vec<serde_json::Value> = Vec::new();
+
+        // 构建上游 trace 数据的辅助闭包
+        let build_upstream_trace = |events: &Vec<serde_json::Value>| -> serde_json::Value {
+            json!({
+                "request": {
+                    "url": &upstream_endpoint,
+                    "method": "POST",
+                    "headers": { "Content-Type": "application/json" },
+                    "body": upstream_trace_body,
+                },
+                "events": events,
+            })
+        };
 
         while let Some(chunk) = byte_stream.next().await {
             match chunk {
                 Err(e) => {
+                    let mut err_data = json!({
+                        "code": "UPSTREAM_STREAM_ERROR",
+                        "message": e.to_string()
+                    });
+                    if upstream_trace_enabled {
+                        err_data["upstream_trace"] = build_upstream_trace(&upstream_trace_events);
+                    }
                     let msg = format!(
                         "data: {}\n\n",
-                        json!({
-                            "event": "error",
-                            "data": { "code": "UPSTREAM_STREAM_ERROR", "message": e.to_string() }
-                        })
+                        json!({ "event": "error", "data": err_data })
                     );
                     yield Ok::<_, std::convert::Infallible>(bytes::Bytes::from(msg));
                     return;
@@ -335,15 +345,16 @@ Then you STOP. After the user answers, their response appears in the conversatio
                     raw_buffer.extend_from_slice(&bytes);
 
                     if raw_buffer.len() > MAX_SSE_BUFFER {
+                        let mut err_data = json!({
+                            "code": "UPSTREAM_STREAM_ERROR",
+                            "message": "Stream chunk exceeded 1MB limit"
+                        });
+                        if upstream_trace_enabled {
+                            err_data["upstream_trace"] = build_upstream_trace(&upstream_trace_events);
+                        }
                         let msg = format!(
                             "data: {}\n\n",
-                            json!({
-                                "event": "error",
-                                "data": {
-                                    "code": "UPSTREAM_STREAM_ERROR",
-                                    "message": "Stream chunk exceeded 1MB limit"
-                                }
-                            })
+                            json!({ "event": "error", "data": err_data })
                         );
                         yield Ok(bytes::Bytes::from(msg));
                         return;
@@ -354,6 +365,29 @@ Then you STOP. After the user answers, their response appears in the conversatio
                         raw_buffer.drain(..pos + 1);
                         let line_owned = String::from_utf8_lossy(&line_bytes).into_owned();
                         let line = line_owned.trim_end_matches('\r');
+
+                        // 检测上游 SSE 的 [DONE] 终止标记（在 handle_sse_line 之前，以便注入 upstream_trace）
+                        if line == "data: [DONE]" {
+                            let mut data = json!({ "usage": last_usage });
+                            if upstream_trace_enabled {
+                                upstream_trace_events.push(json!("[DONE]"));
+                                data["upstream_trace"] = build_upstream_trace(&upstream_trace_events);
+                            }
+                            let done_msg = json!({ "event": "message_done", "data": data });
+                            yield Ok(bytes::Bytes::from(format!("data: {done_msg}\n\n")));
+                            return;
+                        }
+
+                        // 缓冲上游原始事件（用于追踪展示）
+                        if upstream_trace_enabled {
+                            if let Some(json_str) = line.strip_prefix("data: ") {
+                                if !json_str.is_empty() {
+                                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
+                                        upstream_trace_events.push(val);
+                                    }
+                                }
+                            }
+                        }
 
                         if let Some(result) = handle_sse_line(line, &mut last_usage, &mut finished) {
                             let is_done = result.is_done;
@@ -372,7 +406,16 @@ Then you STOP. After the user answers, their response appears in the conversatio
         if !raw_buffer.is_empty() {
             let tail_owned = String::from_utf8_lossy(&raw_buffer).into_owned();
             let tail = tail_owned.trim_end_matches('\r');
-            if let Some(result) = handle_sse_line(tail, &mut last_usage, &mut finished) {
+            if tail == "data: [DONE]" {
+                let mut data = json!({ "usage": last_usage });
+                if upstream_trace_enabled {
+                    upstream_trace_events.push(json!("[DONE]"));
+                    data["upstream_trace"] = build_upstream_trace(&upstream_trace_events);
+                }
+                let done_msg = json!({ "event": "message_done", "data": data });
+                yield Ok(bytes::Bytes::from(format!("data: {done_msg}\n\n")));
+                done_yielded = true;
+            } else if let Some(result) = handle_sse_line(tail, &mut last_usage, &mut finished) {
                 let is_done = result.is_done;
                 yield Ok(bytes::Bytes::from(result.bytes));
                 if is_done {
@@ -382,7 +425,11 @@ Then you STOP. After the user answers, their response appears in the conversatio
         }
 
         if !done_yielded {
-            let done_msg = json!({ "event": "message_done", "data": { "usage": last_usage } });
+            let mut data = json!({ "usage": last_usage });
+            if upstream_trace_enabled {
+                data["upstream_trace"] = build_upstream_trace(&upstream_trace_events);
+            }
+            let done_msg = json!({ "event": "message_done", "data": data });
             yield Ok(bytes::Bytes::from(format!("data: {done_msg}\n\n")));
         }
     };

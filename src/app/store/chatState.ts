@@ -1,10 +1,4 @@
-import { Chat, Message } from '../types';
-import {
-  appendThinkingContent,
-  appendVisibleContent,
-  closeOpenThinking,
-  keepFirstThinkingPair,
-} from '../utils/messageContentProtocol';
+import { Chat, Message, MessageSegment } from '../types';
 
 export function updateChatEntry(
   chats: Chat[],
@@ -48,6 +42,17 @@ export function updateMessageInList(
   return messages.map((message) => (message.id === messageId ? updater(message) : message));
 }
 
+/**
+ * 将 delta 追加到 segments 末尾的同类型分段；若末尾类型不同则新建分段。
+ */
+function appendToSegment(segments: MessageSegment[], type: MessageSegment['type'], delta: string): MessageSegment[] {
+  const last = segments[segments.length - 1];
+  if (last?.type === type) {
+    return [...segments.slice(0, -1), { ...last, content: (last as { type: typeof type; content: string }).content + delta }];
+  }
+  return [...segments, { type, content: delta } as MessageSegment];
+}
+
 export function appendReasoningDelta(
   messages: Message[],
   messageId: string,
@@ -55,7 +60,8 @@ export function appendReasoningDelta(
 ): Message[] {
   return updateMessageInList(messages, messageId, (message) => ({
     ...message,
-    content: appendThinkingContent(message.content, delta),
+    segments: appendToSegment(message.segments ?? [], 'reasoning', delta),
+    reasoning: (message.reasoning ?? '') + delta,
     rawResponse: `${message.rawResponse ?? ''}${delta}`,
     status: 'reasoning' as const,
   }));
@@ -68,10 +74,41 @@ export function appendContentDelta(
 ): Message[] {
   return updateMessageInList(messages, messageId, (message) => ({
     ...message,
-    content: appendVisibleContent(message.content, delta),
+    segments: appendToSegment(message.segments ?? [], 'content', delta),
+    content: message.content + delta,
     rawResponse: `${message.rawResponse ?? ''}${delta}`,
     status: 'typing' as const,
   }));
+}
+
+/**
+ * 在 message_done 时将本轮新增的 tool calls 作为 tool_calls 分段追加到 segments。
+ */
+export function appendToolCallSegment(
+  messages: Message[],
+  messageId: string,
+  newCalls: MessageSegment & { type: 'tool_calls' } extends MessageSegment ? MessageSegment[] : never,
+): Message[] {
+  const add: MessageSegment[] = newCalls.length > 0
+    ? [{ type: 'tool_calls' as const, calls: newCalls as unknown as MessageSegment & { type: 'tool_calls' } extends MessageSegment ? MessageSegment['calls'] : never }]
+    : [];
+  return updateMessageInList(messages, messageId, (message) => {
+    if (add.length === 0) return message;
+    return { ...message, segments: [...(message.segments ?? []), ...add] };
+  });
+}
+
+// Overload-friendly version
+export function appendToolCallSegments(
+  messages: Message[],
+  messageId: string,
+  newCalls: { id: string; name: string; input: unknown; status: string }[],
+): Message[] {
+  return updateMessageInList(messages, messageId, (message) => {
+    if (newCalls.length === 0) return message;
+    const toolSeg: MessageSegment = { type: 'tool_calls', calls: newCalls as any };
+    return { ...message, segments: [...(message.segments ?? []), toolSeg] };
+  });
 }
 
 export function finalizeMessage(
@@ -80,7 +117,6 @@ export function finalizeMessage(
 ): Message[] {
   return updateMessageInList(messages, messageId, (message) => ({
     ...message,
-    content: keepFirstThinkingPair(closeOpenThinking(message.content)),
     status: 'done' as const,
   }));
 }

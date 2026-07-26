@@ -6,6 +6,7 @@ import { debugLog, debugError } from "../../utils/debugLogger";
 export interface RichComposerEditorHandle {
   focus: () => void;
   clear: () => void;
+  setContent: (text: string) => void;
 }
 
 interface RichComposerEditorProps {
@@ -156,6 +157,28 @@ export const RichComposerEditor = forwardRef<RichComposerEditorHandle, RichCompo
           editorRef.current.innerHTML = "";
           onDraftChangeRef.current("", []);
         }
+      },
+      setContent: (text: string) => {
+        debugLog('editor', 'setContent called', { textLength: text.length });
+        const editor = editorRef.current;
+        if (!editor) return;
+        // Preserve reference tokens — keep token spans, replace text only
+        const tokens: { element: HTMLElement; refId: string }[] = [];
+        editor.querySelectorAll<HTMLElement>('[data-reference-id]').forEach((el) => {
+          tokens.push({ element: el, refId: el.dataset.referenceId ?? '' });
+        });
+        editor.innerHTML = '';
+        if (tokens.length > 0) {
+          editor.textContent = text;
+          tokens.forEach(({ element }) => {
+            editor.appendChild(document.createTextNode(' '));
+            editor.appendChild(element.cloneNode(true));
+          });
+          editor.appendChild(document.createTextNode(' '));
+        } else {
+          editor.textContent = text;
+        }
+        placeCaretAtEnd(editor);
       },
     }), []);
 

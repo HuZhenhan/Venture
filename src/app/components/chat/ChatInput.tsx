@@ -1,11 +1,12 @@
 import React from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { 
-  Send, 
-  Plus, 
+import {
+  Send,
+  Plus,
   Hash,
-  ChevronDown, 
-  Square
+  ChevronDown,
+  Square,
+  Bug
 } from "lucide-react";
 import { useChatStore } from "../../store/useChatStore";
 import { useLayoutStore } from "../../store/useLayoutStore";
@@ -30,6 +31,13 @@ interface ChatInputProps {
 export function ChatInput({ inputAreaRef, onMessageSent }: ChatInputProps = {}) {
   const currentTasks = useChatStore((state) => state.currentTasks);
   const setActiveChatId = useChatStore((state) => state.setActiveChatId);
+  const activeChatId = useChatStore((state) => state.activeChatId);
+  const tracedChatId = useChatStore((state) => state.tracedChatId);
+  const traceRequested = useChatStore((state) => state.traceRequested);
+  const setTracedChatId = useChatStore((state) => state.setTracedChatId);
+  const setTraceRequested = useChatStore((state) => state.setTraceRequested);
+  const clearTraceRecords = useChatStore((state) => state.clearTraceRecords);
+  const debugMode = usePreferencesStore((state) => state.debugMode);
   const sendShortcut = usePreferencesStore((state) => state.sendShortcut);
   const openCodeReferenceAction = useLayoutStore((state) => state.openCodeReference);
   const openDiffAction = useLayoutStore((state) => state.openDiff);
@@ -134,6 +142,26 @@ export function ChatInput({ inputAreaRef, onMessageSent }: ChatInputProps = {}) 
 
     handleSubmit();
   }, [draftMessage, editorRef, handleSubmit, setDraftMessage, setDraftNodes, setOccupancyMonitorDebug, setOriginalContentDebug, setRawResponseDebug, toggleSidebar, setShowTestButton, setShowLayoutDebug]);
+
+  // 追踪 toggle：当前正在追踪该 chat → 停止；否则 → 开启追踪。
+  // 如果当前有 activeChatId，立即绑定追踪；如果没有（空状态），设置 traceRequested，
+  // 等下次发消息创建新 chat 时自动绑定（见 useChatComposer.handleSubmit）。
+  const isTraceActive = tracedChatId !== null && tracedChatId === activeChatId;
+  const isTracePending = traceRequested;
+
+  const handleToggleTrace = React.useCallback(() => {
+    if (isTraceActive) {
+      // 正在追踪当前 chat → 停止
+      clearTraceRecords();
+    } else if (activeChatId) {
+      // 有当前 chat → 立即绑定追踪
+      setTraceRequested(false);
+      setTracedChatId(activeChatId);
+    } else {
+      // 空状态 → 设置 pending，等创建新 chat 时绑定
+      setTraceRequested(true);
+    }
+  }, [isTraceActive, activeChatId, clearTraceRecords, setTraceRequested, setTracedChatId]);
 
   return (
     <div ref={inputAreaRef} className="absolute bottom-0 left-0 right-0 p-4 sm:p-6 pointer-events-none z-40">
@@ -276,6 +304,29 @@ export function ChatInput({ inputAreaRef, onMessageSent }: ChatInputProps = {}) 
                         )}
                       </AnimatePresence>
                     </div>
+                    {debugMode && (
+                      <button
+                        type="button"
+                        data-composer-action="true"
+                        onMouseDown={preserveComposerFocus}
+                        onClick={handleToggleTrace}
+                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition-all active:scale-90 ${
+                          isTraceActive || isTracePending
+                            ? "bg-amber-500/15 text-amber-500"
+                            : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                        }`}
+                        aria-label="追踪 API 请求"
+                        title={
+                          isTraceActive
+                            ? "追踪中（点击关闭）"
+                            : isTracePending
+                            ? "追踪已挂起，发送消息后开始追踪"
+                            : "开启 API 追踪"
+                        }
+                      >
+                        <Bug size={15} strokeWidth={2.1} />
+                      </button>
+                    )}
                   </div>
                   <button type={isGenerating ? "button" : "button"} data-composer-action="true" onMouseDown={preserveComposerFocus} onClick={isGenerating ? handleStopGeneration : handleEditorSubmit} disabled={((!draftMessage.trim() && draftReferences.length === 0) || availableModels.length === 0) && !isGenerating} className={`relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-xl transition-all duration-300 active:scale-90 ${((draftMessage.trim() || draftReferences.length > 0) && availableModels.length > 0) || isGenerating ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground cursor-not-allowed opacity-40"}`} title={availableModels.length === 0 ? "未启用任何模型" : undefined}>
                     <AnimatePresence mode="wait">

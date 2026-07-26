@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { APIConfig, Chat, ChatMode, ComposerDraftNode, ComposerReference, Message, Task } from '../types';
+import { APIConfig, Chat, ChatMode, ComposerDraftNode, ComposerReference, Message, Task, TraceRecord } from '../types';
 import { appendMessageToChat, updateChatEntry, updateChatMessagesInList } from './chatState';
 import { listProviders } from '../services/modelConfigService';
 import { patchAppData } from '../services/appDataService';
@@ -184,7 +184,14 @@ interface ChatState {
   draftMessage: string;
   draftNodes: ComposerDraftNode[];
   draftReferences: ComposerReference[];
-  
+
+  // Trace state (in-memory only, not persisted)
+  tracedChatId: string | null;
+  traceRecords: TraceRecord[];
+  /// 用户请求追踪但当前没有 activeChatId 时置 true，
+  /// 等下次发送消息创建新 chat 时自动绑定 tracedChatId。
+  traceRequested: boolean;
+
   // Actions
   setActiveChatId: (id: string | null) => void;
   setChats: (chats: Chat[] | ((prev: Chat[]) => Chat[])) => void;
@@ -210,6 +217,14 @@ interface ChatState {
   renameChat: (id: string, title: string) => void;
   setChatMode: (id: string, mode: ChatMode) => void;
   cloneChat: (id: string) => void;
+
+  // Trace actions
+  setTracedChatId: (id: string | null) => void;
+  setTraceRequested: (requested: boolean) => void;
+  addTraceRecord: (record: TraceRecord) => void;
+  clearTraceRecords: () => void;
+  /// 仅清空追踪记录数组，保留 tracedChatId（让用户继续追踪但清空历史）。
+  clearTraceRecordsOnly: () => void;
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
@@ -224,6 +239,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   draftMessage: '',
   draftNodes: [],
   draftReferences: [],
+
+  tracedChatId: null,
+  traceRecords: [],
+  traceRequested: false,
 
   setActiveChatId: (id) => {
     persistActiveChatId(id);
@@ -354,4 +373,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     persistActiveChatId(newChat.id);
     return { chats, activeChatId: newChat.id };
   }),
+
+  setTracedChatId: (id) => set({ tracedChatId: id }),
+  setTraceRequested: (requested) => set({ traceRequested: requested }),
+  addTraceRecord: (record) => set((state) => ({
+    traceRecords: [...state.traceRecords, record],
+  })),
+  clearTraceRecords: () => set({ traceRecords: [], tracedChatId: null, traceRequested: false }),
+  clearTraceRecordsOnly: () => set({ traceRecords: [] }),
 }));

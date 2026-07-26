@@ -46,12 +46,14 @@ export const SettingsSidebar: React.FC<SettingsSidebarProps> = ({
     sendShortcut: savedSendShortcut,
     autoGenerateConversationTitles: savedAutoGenerateConversationTitles,
     autoGenerateReasoningTitles: savedAutoGenerateReasoningTitles,
+    debugMode: savedDebugMode,
     setPreferences,
   } = usePreferencesStore();
   const hydratePreferences = usePreferencesStore((state) => state.hydratePreferences);
   const [draftSendShortcut, setDraftSendShortcut] = useState(savedSendShortcut);
   const [draftAutoGenerateConversationTitles, setDraftAutoGenerateConversationTitles] = useState(savedAutoGenerateConversationTitles);
   const [draftAutoGenerateReasoningTitles, setDraftAutoGenerateReasoningTitles] = useState(savedAutoGenerateReasoningTitles);
+  const [draftDebugMode, setDraftDebugMode] = useState(savedDebugMode);
   const [draftTheme, setDraftTheme] = useState<ThemeMode>(theme);
   const [migrationStatus, setMigrationStatus] = useState<string | null>(null);
   const [isResizing, setIsResizing] = useState(false);
@@ -72,6 +74,7 @@ export const SettingsSidebar: React.FC<SettingsSidebarProps> = ({
     draftSendShortcut !== savedSendShortcut ||
     draftAutoGenerateConversationTitles !== savedAutoGenerateConversationTitles ||
     draftAutoGenerateReasoningTitles !== savedAutoGenerateReasoningTitles ||
+    draftDebugMode !== savedDebugMode ||
     draftTheme !== theme;
 
   useEffect(() => {
@@ -82,14 +85,16 @@ export const SettingsSidebar: React.FC<SettingsSidebarProps> = ({
     setDraftSendShortcut(savedSendShortcut);
     setDraftAutoGenerateConversationTitles(savedAutoGenerateConversationTitles);
     setDraftAutoGenerateReasoningTitles(savedAutoGenerateReasoningTitles);
+    setDraftDebugMode(savedDebugMode);
     setDraftTheme(theme);
-  }, [isOpen, savedSendShortcut, savedAutoGenerateConversationTitles, savedAutoGenerateReasoningTitles, theme]);
+  }, [isOpen, savedSendShortcut, savedAutoGenerateConversationTitles, savedAutoGenerateReasoningTitles, savedDebugMode, theme]);
 
   const handleSavePreferences = () => {
     setPreferences({
       sendShortcut: draftSendShortcut,
       autoGenerateConversationTitles: draftAutoGenerateConversationTitles,
       autoGenerateReasoningTitles: draftAutoGenerateReasoningTitles,
+      debugMode: draftDebugMode,
     });
     if (draftTheme !== theme) {
       setTheme(draftTheme);
@@ -142,6 +147,8 @@ export const SettingsSidebar: React.FC<SettingsSidebarProps> = ({
             onAutoGenerateConversationTitlesChange={setDraftAutoGenerateConversationTitles}
             autoGenerateReasoningTitles={draftAutoGenerateReasoningTitles}
             onAutoGenerateReasoningTitlesChange={setDraftAutoGenerateReasoningTitles}
+            debugMode={draftDebugMode}
+            onDebugModeChange={setDraftDebugMode}
             onSave={handleSavePreferences}
             hasPendingChanges={hasPendingPreferenceChanges}
           />

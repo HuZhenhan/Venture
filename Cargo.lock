@@ -4423,7 +4423,9 @@ dependencies = [
  "bytes",
  "directories",
  "futures-util",
+ "glob",
  "rand 0.8.7",
+ "regex",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
@@ -4435,6 +4437,7 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "walkdir",
 ]
 
 [[package]]

@@ -4,7 +4,8 @@ import { useChatStore } from '../../../store/useChatStore';
 import { useLayoutStore } from '../../../store/useLayoutStore';
 import { useGeneration } from '../../../hooks/useGeneration';
 import { copyTextToClipboard } from '../../../utils/clipboard';
-import { adaptLegacyMessageContent, setAskAnswer, skipAsk, getAskForms } from '../../../utils/messageContentProtocol';
+import { adaptLegacyMessageContent, getVisibleText } from '../../../utils/messageContentProtocol';
+import { INSERT_CHAT_EVENT } from '../../../utils/codeReferences';
 
 export function useMessageListActions(chat: { id: string; messages: Message[] } | null, activeChatId: string | null) {
   const setActiveChatId = useChatStore((state) => state.setActiveChatId);
@@ -77,22 +78,24 @@ export function useMessageListActions(chat: { id: string; messages: Message[] } 
   }, [handleRejectFileOp]);
 
   const handleUpdateAskBlock = useCallback((messageId: string, askId: string, answer: { selectedOptions?: string[]; text?: string }) => {
-    if (!activeChatId) {
-      return;
-    }
+    if (!activeChatId) return;
 
     let allResolved = false;
     updateChatMessages(activeChatId, (messages) =>
       messages.map((message) => {
         if (message.id !== messageId) return message;
-        const adaptedContent = adaptLegacyMessageContent(message);
-        const newContent = setAskAnswer(adaptedContent, askId, answer);
-        const asks = getAskForms(newContent);
-        allResolved = asks.length > 0 && asks.every((ask) => ask.status !== 'pending');
-        return {
-          ...message,
-          content: newContent,
-        };
+        // 找到对应 tool call 并更新为 completed
+        const tcIndex = (message.toolCalls ?? []).findIndex(
+          (tc) => tc.name === 'AskUserQuestion' && tc.status === 'needs_user_input'
+        );
+        if (tcIndex === -1) return message;
+        const updatedCalls = (message.toolCalls ?? []).map((tc, i) =>
+          i === tcIndex
+            ? { ...tc, status: 'completed' as const, output: JSON.stringify(answer) }
+            : tc
+        );
+        allResolved = updatedCalls.every((tc) => tc.name !== 'AskUserQuestion' || tc.status !== 'needs_user_input');
+        return { ...message, toolCalls: updatedCalls };
       }),
     );
 
@@ -102,22 +105,23 @@ export function useMessageListActions(chat: { id: string; messages: Message[] } 
   }, [activeChatId, triggerAIResponse, updateChatMessages]);
 
   const handleSkipAskBlock = useCallback((messageId: string, askId: string) => {
-    if (!activeChatId) {
-      return;
-    }
+    if (!activeChatId) return;
 
     let allResolved = false;
     updateChatMessages(activeChatId, (messages) =>
       messages.map((message) => {
         if (message.id !== messageId) return message;
-        const adaptedContent = adaptLegacyMessageContent(message);
-        const newContent = skipAsk(adaptedContent, askId);
-        const asks = getAskForms(newContent);
-        allResolved = asks.length > 0 && asks.every((ask) => ask.status !== 'pending');
-        return {
-          ...message,
-          content: newContent,
-        };
+        const tcIndex = (message.toolCalls ?? []).findIndex(
+          (tc) => tc.name === 'AskUserQuestion' && tc.status === 'needs_user_input'
+        );
+        if (tcIndex === -1) return message;
+        const updatedCalls = (message.toolCalls ?? []).map((tc, i) =>
+          i === tcIndex
+            ? { ...tc, status: 'completed' as const, output: '[skipped]' }
+            : tc
+        );
+        allResolved = updatedCalls.every((tc) => tc.name !== 'AskUserQuestion' || tc.status !== 'needs_user_input');
+        return { ...message, toolCalls: updatedCalls };
       }),
     );
 
@@ -198,7 +202,19 @@ export function useMessageListActions(chat: { id: string; messages: Message[] } 
       }
     }
 
+    // 撤销前捕获被移除的用户消息文本，以便回填到输入框
+    const undoneUserMessage = currentChat.messages[sliceIndex];
+    const undoneText = undoneUserMessage && undoneUserMessage.role === 'user'
+      ? getVisibleText(adaptLegacyMessageContent(undoneUserMessage))
+      : '';
+
     updateChatMessages(activeChatId, (messages) => messages.slice(0, sliceIndex));
+
+    // 将被撤销的用户输入内容重新回填到输入框
+    if (undoneText) {
+      document.dispatchEvent(new CustomEvent(INSERT_CHAT_EVENT, { detail: { text: undoneText } }));
+    }
+
     setShowUndoConfirm(null);
   }, [activeChatId, updateChatMessages]);
 

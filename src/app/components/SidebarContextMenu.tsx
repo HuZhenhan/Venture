@@ -1,7 +1,8 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { Edit2, Layers, Archive, FileJson, Trash2 } from 'lucide-react';
+import { Edit2, Layers, Archive, FileJson, Trash2, Bug } from 'lucide-react';
 import { useChatStore } from '../store/useChatStore';
+import { usePreferencesStore } from '../store/usePreferencesStore';
 import { resolveFloatingPosition } from '../utils/floatingPosition';
 
 interface SidebarContextMenuProps {
@@ -19,7 +20,8 @@ export const SidebarContextMenu: React.FC<SidebarContextMenuProps> = ({
   onClose,
   onRename
 }) => {
-  const { chats, deleteChat, cloneChat } = useChatStore();
+  const { chats, deleteChat, cloneChat, setTracedChatId } = useChatStore();
+  const debugMode = usePreferencesStore((state) => state.debugMode);
   const chat = chats.find(c => c.id === chatId);
   const position = resolveFloatingPosition({ x, y, width: 180, height: 200 });
 
@@ -96,6 +98,21 @@ export const SidebarContextMenu: React.FC<SidebarContextMenuProps> = ({
           <Trash2 className="w-3.5 h-3.5" />
           <span>删除</span>
         </button>
+        {debugMode && (
+          <>
+            <div className="h-[1px] bg-muted/50 my-1 mx-1.5" />
+            <button
+              onClick={() => {
+                setTracedChatId(chatId);
+                onClose();
+              }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-[13px] text-amber-500 hover:bg-amber-500/10 rounded-lg transition-colors"
+            >
+              <Bug className="w-3.5 h-3.5" />
+              <span>追踪</span>
+            </button>
+          </>
+        )}
       </motion.div>
     </div>
   );

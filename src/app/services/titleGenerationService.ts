@@ -8,22 +8,38 @@ const TITLE_SYSTEM_PROMPT = [
 ].join(' ');
 
 function cleanGeneratedTitle(rawTitle: string): string | null {
-  const firstLine = rawTitle
+  const lines = rawTitle
     .split('\n')
     .map((line) => line.trim())
-    .find(Boolean);
+    .filter(Boolean);
 
-  if (!firstLine) {
-    return null;
+  if (!lines.length) return null;
+
+  function cleanLine(line: string): string {
+    return line
+      .replace(/^#+\s*/, '')
+      .replace(/^(标题|Title)[:：]\s*/i, '')
+      .replace(/["'“”‘’`*_]/g, '')
+      .replace(/[。.!！?？,，;；:：]+$/g, '')
+      .trim();
   }
 
-  const title = firstLine
-    .replace(/^#+\s*/, '')
-    .replace(/^(标题|Title)[:：]\s*/i, '')
-    .replace(/["'“”‘’`*_]/g, '')
-    .replace(/[。.!！?？,，;；:：]+$/g, '')
-    .trim();
+  function looksLikeThinking(line: string): boolean {
+    const cleaned = cleanLine(line);
+    if (!cleaned || cleaned.length > 40) return true;
+    return /^(我们被要求|对话内容|系统提示|根据系统|我决定|基于以上|The user|The assistant|I need|I should|I'll|Let me|Based on|First,)/i.test(cleaned);
+  }
 
+  // 从末尾往前扫描，优先取最后一条像标题的行（模型通常把最终答案放在末尾）
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    if (!looksLikeThinking(lines[i])) {
+      const result = cleanLine(lines[i]);
+      if (result) return result.slice(0, 36);
+    }
+  }
+
+  // 所有行都像 thinking 文本，退回到取第一行
+  const title = cleanLine(lines[0]);
   return title ? title.slice(0, 36) : null;
 }
 
@@ -41,7 +57,7 @@ async function requestGeneratedTitle(modelId: string, userPrompt: string): Promi
       messages,
       contextWindow: 2,
       temperature: 0.2,
-      maxTokens: 48,
+      maxTokens: 200,
     },
     (event) => {
       if (event.event === 'content_delta') {

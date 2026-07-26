@@ -25,11 +25,13 @@ interface PreferencesPanelProps {
   sendShortcut: boolean;
   autoGenerateConversationTitles: boolean;
   autoGenerateReasoningTitles: boolean;
+  debugMode: boolean;
   appearance: string;
   hasPendingChanges: boolean;
   onSendShortcutChange: (value: boolean) => void;
   onAutoGenerateConversationTitlesChange: (value: boolean) => void;
   onAutoGenerateReasoningTitlesChange: (value: boolean) => void;
+  onDebugModeChange: (value: boolean) => void;
   onAppearanceChange: (appearance: string) => void;
   onSave: () => void;
 }
@@ -141,11 +143,13 @@ export function PreferencesPanel({
   sendShortcut,
   autoGenerateConversationTitles,
   autoGenerateReasoningTitles,
+  debugMode,
   appearance,
   hasPendingChanges,
   onSendShortcutChange,
   onAutoGenerateConversationTitlesChange,
   onAutoGenerateReasoningTitlesChange,
+  onDebugModeChange,
   onAppearanceChange,
   onSave,
 }: PreferencesPanelProps) {
@@ -190,6 +194,16 @@ export function PreferencesPanel({
               options={['跟随系统', '浅色模式', '深色模式']}
               onChange={onAppearanceChange}
               menuPosition="top"
+            />
+          </div>
+          <div className="flex items-center justify-between px-4 py-3.5">
+            <div className="space-y-0.5 pr-4">
+              <p className="text-[13px] font-semibold text-foreground">调试模式</p>
+              <p className="text-[11px] text-muted-foreground">开启后在对话列表右键菜单显示「追踪」选项</p>
+            </div>
+            <AppleToggle
+              checked={debugMode}
+              onChange={() => onDebugModeChange(!debugMode)}
             />
           </div>
         </div>
@@ -427,7 +441,7 @@ export function ProviderConfigModal({
     baseUrl: '',
     apiKey: '',
     models: [{ id: '', name: '', enabled: true, supportsMultimodal: false }],
-    inputContextWindow: 20,
+    inputContextWindow: 0,
     outputContextWindow: 2048,
   };
 
@@ -653,19 +667,7 @@ export function ProviderConfigModal({
 
               <div className="space-y-3">
                 <label className="ml-1 text-[11px] font-bold uppercase tracking-widest text-muted-foreground">上下文配置</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <span className="ml-1 text-[11px] text-muted-foreground">输入上下文（最近 N 轮）</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={200}
-                      value={formData.inputContextWindow}
-                      onChange={(e) => setFormData((p) => ({ ...p, inputContextWindow: parseInt(e.target.value) || 20 }))}
-                      className="w-full rounded-[20px] border-none bg-input-background px-4 py-3 text-[15px] font-medium outline-none transition-all focus:ring-4 focus:ring-primary/5"
-                    />
-                  </div>
-                  <div className="space-y-1.5">
+                <div className="space-y-1.5">
                     <span className="ml-1 text-[11px] text-muted-foreground">输出上下文（max tokens）</span>
                     <input
                       type="number"
@@ -676,7 +678,6 @@ export function ProviderConfigModal({
                       className="w-full rounded-[20px] border-none bg-input-background px-4 py-3 text-[15px] font-medium outline-none transition-all focus:ring-4 focus:ring-primary/5"
                     />
                   </div>
-                </div>
               </div>
 
               {saveError && (

@@ -24,7 +24,7 @@ import { ErrorBoundary } from '../../ui/ErrorBoundary';
 import { usePreferencesStore } from '../../../store/usePreferencesStore';
 import { useChatStore } from '../../../store/useChatStore';
 import { useLayoutStore } from '../../../store/useLayoutStore';
-import { getResidualMessageBlocks, getAskForms, adaptLegacyMessageContent } from '../../../utils/messageContentProtocol';
+import { getResidualMessageBlocks } from '../../../utils/messageContentProtocol';
 import { MessageContentRenderer } from './MessageContentRenderer';
 
 export const ScrollRootCtx = createContext<React.MutableRefObject<HTMLDivElement | null>>({ current: null });
@@ -610,7 +610,7 @@ export const MessageItem = memo(function MessageItem({
     message.role === 'ai' &&
     message.status === 'done' &&
     !isGenerating &&
-    !getAskForms(adaptLegacyMessageContent(message)).some((ask) => ask.status === 'pending') &&
+    !(message.toolCalls ?? []).some((tc) => tc.status === 'needs_user_input') &&
     !message.blocks?.some(
       (block) => block.type === 'file_op' && block.fileOp.status === 'requires_confirmation'
     );

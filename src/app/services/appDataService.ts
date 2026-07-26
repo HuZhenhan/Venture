@@ -36,6 +36,7 @@ const DEFAULT_PREFERENCES: AppPreferences = {
   sendShortcut: true,
   autoGenerateConversationTitles: true,
   autoGenerateReasoningTitles: true,
+  debugMode: false,
 };
 
 // 旧版/未重启的后端可能没有 app-data 路由；404 后本次运行直接熔断，避免每次状态变更重复请求。
@@ -181,5 +182,6 @@ function normalizePreferences(
     autoGenerateReasoningTitles: typeof value.autoGenerateReasoningTitles === 'boolean'
       ? value.autoGenerateReasoningTitles
       : legacyAutoGenerateTitles ?? DEFAULT_PREFERENCES.autoGenerateReasoningTitles,
+    debugMode: typeof value.debugMode === 'boolean' ? value.debugMode : DEFAULT_PREFERENCES.debugMode,
   };
 }

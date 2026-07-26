@@ -18,6 +18,8 @@ pub struct AppPreferences {
     pub send_shortcut: bool,
     pub auto_generate_conversation_titles: bool,
     pub auto_generate_reasoning_titles: bool,
+    #[serde(default)]
+    pub debug_mode: bool,
 }
 
 impl Default for AppPreferences {
@@ -27,6 +29,7 @@ impl Default for AppPreferences {
             send_shortcut: true,
             auto_generate_conversation_titles: true,
             auto_generate_reasoning_titles: true,
+            debug_mode: false,
         }
     }
 }

@@ -7,16 +7,16 @@ import { ReasoningDisplay } from '../../ReasoningDisplay';
 import { MarkdownContent } from '../../ui/MarkdownContent';
 import { ComposerReferencePill } from '../cards/ComposerReferencePill';
 import { AskCardInline, AskCardFull } from '../cards/AskCardContainer';
+import { ToolCallCard } from '../cards/ToolCallCard';
 import {
   adaptLegacyMessageContent,
   attachmentToReference,
-  getAskForms,
   getNodeText,
   MessageContentNode,
-  parseAskNode,
   parseAttachmentNode,
   parseErrorNode,
   parseMessageContent,
+  toolCallToAskForm,
 } from '../../../utils/messageContentProtocol';
 
 interface MessageContentRendererProps {
@@ -84,18 +84,31 @@ export const MessageContentRenderer = memo(function MessageContentRenderer({
   onSkipAskBlock,
   showReasoningTitle,
 }: MessageContentRendererProps) {
-  const nodes = useMemo(
-    () => parseMessageContent(adaptLegacyMessageContent(message)),
+  const segments = message.segments;
+  const hasSegments = !!(segments && segments.length > 0);
+  const hasSeparateReasoning = message.reasoning != null;
+  const rawContent = useMemo(
+    () => adaptLegacyMessageContent(message),
     [message],
   );
+  const nodes = useMemo(
+    () => {
+      const parsed = parseMessageContent(rawContent);
+      if (hasSegments) {
+        // 时序分段模式：text/thinking 由 segments 渲染，这里只保留 ask/error/attachment
+        return parsed.filter((node) =>
+          node.type === 'tag' && ['error', 'attachment'].includes(node.name),
+        );
+      }
+      // 兼容旧格式：过滤掉 thinking 标签避免与独立 reasoning 字段重复
+      if (hasSeparateReasoning) {
+        return parsed.filter((node) => node.type !== 'tag' || node.name !== 'thinking');
+      }
+      return parsed;
+    },
+    [rawContent, hasSeparateReasoning, hasSegments],
+  );
   const lastTextIndex = nodes.findLastIndex((node) => node.type === 'text' && node.content.length > 0);
-
-  // Extract all ask forms to determine which is the first pending (active) one
-  const asks = useMemo(() => getAskForms(adaptLegacyMessageContent(message)), [message]);
-  const firstPendingAskId = useMemo(() => {
-    const firstPending = asks.find((ask) => ask.status === 'pending');
-    return firstPending?.id;
-  }, [asks]);
 
   const renderNodes = (items: MessageContentNode[], path: string): React.ReactNode => items.map((node, index) => {
     const key = `${path}-${index}`;
@@ -128,37 +141,6 @@ export const MessageContentRenderer = memo(function MessageContentRenderer({
 
     if (node.name === 'error') return <ErrorContent key={key} node={node} />;
 
-    if (node.name === 'ask') {
-      const ask = parseAskNode(node);
-      if (!ask) return null;
-
-      // Render inline based on status
-      if (ask.status === 'pending') {
-        if (ask.id === firstPendingAskId) {
-          // This is the active ask - show full card
-          return (
-            <AskCardFull
-              key={key}
-              ask={ask}
-              onAnswer={(askId, answer) => onUpdateAskBlock(message.id, askId, answer)}
-              onSkip={(askId) => onSkipAskBlock(message.id, askId)}
-            />
-          );
-        }
-        // Not the active pending ask - show as waiting inline
-        return (
-          <motion.div key={key} initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} className="flex items-center gap-2 text-[12px] text-muted-foreground/50">
-            <span className="inline-block w-2 h-2 rounded-full bg-muted-foreground/30" />
-            <span className="truncate">{ask.question}</span>
-            <span>· 等待中</span>
-          </motion.div>
-        );
-      }
-
-      // Answered or skipped - show as compact inline
-      return <AskCardInline key={key} ask={ask} />;
-    }
-
     if (node.name === 'attachment') {
       const resource = parseAttachmentNode(node);
       if (!resource) return null;
@@ -173,5 +155,108 @@ export const MessageContentRenderer = memo(function MessageContentRenderer({
     return <span key={key}>{renderNodes(node.children, key)}</span>;
   });
 
-  return <>{renderNodes(nodes, message.id)}</>;
+  return (
+    <>
+      {hasSegments ? (
+        // 时序分段模式：按 streaming 到达顺序渲染
+        segments!.map((seg, i) => {
+          const isLastSeg = i === segments!.length - 1;
+          if (seg.type === 'reasoning') {
+            return (
+              <motion.div key={`seg-${i}`} initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }}>
+                <ReasoningDisplay
+                  reasoning={seg.content}
+                  isComplete={!isLastSeg || message.status !== 'reasoning'}
+                  status={isLastSeg && message.status === 'reasoning' ? 'reasoning' : 'done'}
+                  title={undefined}
+                />
+              </motion.div>
+            );
+          }
+          if (seg.type === 'content') {
+            return (
+              <motion.div key={`seg-${i}`} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }} className="group/msg relative select-text">
+                <MarkdownContent
+                  content={seg.content}
+                  status={isLastSeg && (message.status === 'typing' || message.status === 'reasoning') ? message.status : 'done'}
+                  onComplete={() => onMarkdownComplete(message.id)}
+                  className="ml-[8px]"
+                />
+              </motion.div>
+            );
+          }
+          if (seg.type === 'tool_calls') {
+            const liveCalls = seg.calls.map((segTc) => {
+              const live = (message.toolCalls ?? []).find((tc) => tc.id === segTc.id);
+              return live ?? segTc;
+            });
+            return liveCalls.map((tool) => {
+              if (tool.name === 'AskUserQuestion') {
+                const ask = toolCallToAskForm(tool);
+                if (!ask) return null;
+                if (ask.status === 'pending') {
+                  return (
+                    <AskCardFull
+                      key={tool.id}
+                      ask={ask}
+                      onAnswer={(askId, answer) => onUpdateAskBlock(message.id, askId, answer)}
+                      onSkip={(askId) => onSkipAskBlock(message.id, askId)}
+                    />
+                  );
+                }
+                return <AskCardInline key={tool.id} ask={ask} />;
+              }
+              return (
+                <motion.div key={tool.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }}>
+                  <ToolCallCard tool={tool} />
+                </motion.div>
+              );
+            });
+          }
+          return null;
+        })
+      ) : (
+        // 兼容旧格式
+        <>
+          {hasSeparateReasoning && message.reasoning && message.reasoning.length > 0 && (
+            <motion.div initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }}>
+              <ReasoningDisplay
+                reasoning={message.reasoning}
+                isComplete={message.status !== 'reasoning'}
+                status={message.status === 'reasoning' ? 'reasoning' : 'done'}
+                title={showReasoningTitle ? message.reasoningTitle : undefined}
+              />
+            </motion.div>
+          )}
+          {message.toolCalls && message.toolCalls.length > 0 && (
+            <>
+              {message.toolCalls.map((tool) => {
+                if (tool.name === 'AskUserQuestion') {
+                  const ask = toolCallToAskForm(tool);
+                  if (!ask) return null;
+                  if (ask.status === 'pending') {
+                    return (
+                      <AskCardFull
+                        key={tool.id}
+                        ask={ask}
+                        onAnswer={(askId, answer) => onUpdateAskBlock(message.id, askId, answer)}
+                        onSkip={(askId) => onSkipAskBlock(message.id, askId)}
+                      />
+                    );
+                  }
+                  return <AskCardInline key={tool.id} ask={ask} />;
+                }
+                return (
+                  <motion.div key={tool.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }}>
+                    <ToolCallCard tool={tool} />
+                  </motion.div>
+                );
+              })}
+            </>
+          )}
+        </>
+      )}
+      {renderNodes(nodes, message.id)}
+    </>
+  );
 });

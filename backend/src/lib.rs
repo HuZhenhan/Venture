@@ -4,12 +4,14 @@ pub mod crypto;
 pub mod error;
 pub mod provider;
 pub mod chat;
+pub mod task_store;
+pub mod tools;
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::{
-    extract::{DefaultBodyLimit, Path, State},
+    extract::{DefaultBodyLimit, Path, Query, State},
     http::Method,
     routing::{get, patch, post},
     Json, Router,
@@ -24,6 +26,7 @@ use app_data::{AppDataFile, AppDataPatch, AppDataStore, MigrateAppDataRequest};
 use config::{ConfigStore, ModelEntry};
 use error::AppError;
 use provider::ChatMessage;
+use task_store::{CreateTaskRequest, Task, TaskStatus, TaskStore, UpdateTaskRequest};
 
 const REQUEST_BODY_LIMIT: usize = 20 * 1024 * 1024;
 
@@ -32,6 +35,8 @@ pub(crate) struct AppState {
     pub(crate) store: Arc<ConfigStore>,
     pub(crate) app_data: Arc<AppDataStore>,
     pub(crate) http: Arc<Client>,
+    pub(crate) task_store: Arc<TaskStore>,
+    pub(crate) read_tracker: Arc<tools::ReadTracker>,
     startup_nonce: String,
 }
 
@@ -78,6 +83,54 @@ struct ChatStreamRequest {
     context_window: u32,
     temperature: Option<f32>,
     max_tokens: Option<u32>,
+    #[serde(default)]
+    trace_upstream: bool,
+}
+
+// ─── 工具调用请求/响应类型 ───────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExecuteToolRequest {
+    tool: String,
+    #[serde(default)]
+    input: Value,
+    /// 任务工具按 chatId 隔离；文件系统工具可忽略。
+    #[serde(default)]
+    chat_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CreateTaskApiRequest {
+    chat_id: String,
+    subject: String,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    status: Option<TaskStatus>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateTaskApiRequest {
+    #[serde(default)]
+    subject: Option<String>,
+    /// None=不动；Some(None)=清空；Some(Some(s))=更新
+    #[serde(default)]
+    description: Option<Option<String>>,
+    #[serde(default)]
+    status: Option<TaskStatus>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TaskQuery {
+    chat_id: String,
+}
+
+/// 读取工作区根路径（可选）。通过环境变量 VENTURE_WORKSPACE_ROOT 配置。
+fn workspace_root() -> Option<PathBuf> {
+    std::env::var("VENTURE_WORKSPACE_ROOT").ok().map(PathBuf::from)
 }
 
 async fn health(State(s): State<AppState>) -> Json<Value> {
@@ -174,8 +227,71 @@ async fn chat_stream(
         context_window: body.context_window,
         temperature: body.temperature,
         max_tokens: body.max_tokens,
+        trace_upstream: body.trace_upstream,
     };
     chat::handle_stream(s.store.clone(), s.http.clone(), req).await
+}
+
+// ─── 工具调用与任务管理路由处理器 ──────────────────────────────────────────
+
+async fn execute_tool_handler(
+    State(s): State<AppState>,
+    Json(body): Json<ExecuteToolRequest>,
+) -> Result<Json<Value>, AppError> {
+    let ws = workspace_root();
+    let result = tools::execute_and_serialize(
+        &body.tool,
+        &body.input,
+        &body.chat_id,
+        s.task_store.as_ref(),
+        ws.as_deref(),
+        s.read_tracker.as_ref(),
+    )
+    .await?;
+    Ok(Json(result))
+}
+
+async fn list_tasks(
+    State(s): State<AppState>,
+    Query(q): Query<TaskQuery>,
+) -> Json<Value> {
+    let tasks = s.task_store.list(&q.chat_id).await;
+    Json(json!({ "tasks": tasks }))
+}
+
+async fn create_task(
+    State(s): State<AppState>,
+    Json(body): Json<CreateTaskApiRequest>,
+) -> Result<Json<Value>, AppError> {
+    let req = CreateTaskRequest {
+        subject: body.subject,
+        description: body.description,
+        status: body.status,
+    };
+    let task: Task = s.task_store.create(&body.chat_id, req).await?;
+    Ok(Json(json!({ "task": task })))
+}
+
+async fn get_task_handler(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<TaskQuery>,
+) -> Result<Json<Task>, AppError> {
+    Ok(Json(s.task_store.get(&q.chat_id, &id).await?))
+}
+
+async fn update_task_full(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+    Query(q): Query<TaskQuery>,
+    Json(body): Json<UpdateTaskApiRequest>,
+) -> Result<Json<Task>, AppError> {
+    let req = UpdateTaskRequest {
+        subject: body.subject,
+        description: body.description,
+        status: body.status,
+    };
+    Ok(Json(s.task_store.update(&q.chat_id, &id, req).await?))
 }
 
 fn generate_nonce() -> String {
@@ -200,8 +316,13 @@ pub async fn run_server(data_dir: Option<PathBuf>) -> anyhow::Result<()> {
         .try_init()
         .ok();
 
+    let tasks_dir = config::app_data_dir(data_dir.as_ref())
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("tasks");
     let store = Arc::new(ConfigStore::load(data_dir.clone()).await?);
     let app_data = Arc::new(AppDataStore::load(data_dir).await?);
+    let task_store = Arc::new(TaskStore::new(tasks_dir));
+    let read_tracker = Arc::new(tools::ReadTracker::new());
     let http = Arc::new(
         Client::builder()
             .connect_timeout(std::time::Duration::from_secs(15))
@@ -210,7 +331,7 @@ pub async fn run_server(data_dir: Option<PathBuf>) -> anyhow::Result<()> {
     );
 
     let startup_nonce = generate_nonce();
-    let state = AppState { store, app_data, http, startup_nonce };
+    let state = AppState { store, app_data, http, task_store, read_tracker, startup_nonce };
 
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(
@@ -251,6 +372,11 @@ pub async fn run_server(data_dir: Option<PathBuf>) -> anyhow::Result<()> {
             patch(update_provider).delete(remove_provider),
         )
         .route("/api/chat/stream", post(chat_stream))
+        // 工具调用：执行单个工具并返回结果
+        .route("/api/tools/execute", post(execute_tool_handler))
+        // 任务管理：CRUD，按 chatId 隔离
+        .route("/api/tasks", get(list_tasks).post(create_task))
+        .route("/api/tasks/:id", get(get_task_handler).patch(update_task_full))
         .layer(DefaultBodyLimit::max(REQUEST_BODY_LIMIT))
         .layer(cors)
         .with_state(state);

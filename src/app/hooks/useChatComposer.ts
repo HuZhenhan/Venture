@@ -17,6 +17,7 @@ import { toast } from 'sonner';
 interface ComposerEditorHandle {
   focus: () => void;
   clear: () => void;
+  setContent: (text: string) => void;
 }
 
 interface UseChatComposerArgs {
@@ -207,6 +208,7 @@ export function useChatComposer({ onMessageSent }: UseChatComposerArgs) {
     const messageBlocks = buildComposerBlocks(trimmedInput, draftReferences, draftNodes);
 
     let targetChatId = activeChatId;
+    const wasNewChat = !targetChatId;
     if (!targetChatId) {
       const newChat = {
         id: crypto.randomUUID(),
@@ -216,6 +218,16 @@ export function useChatComposer({ onMessageSent }: UseChatComposerArgs) {
       };
       addChat(newChat);
       targetChatId = newChat.id;
+    }
+
+    // 如果用户在空状态时开启了追踪请求（traceRequested），
+    // 现在新 chat 已创建，把追踪绑定到这个新 chat。
+    if (wasNewChat) {
+      const { traceRequested, setTracedChatId, setTraceRequested } = useChatStore.getState();
+      if (traceRequested) {
+        setTracedChatId(targetChatId);
+        setTraceRequested(false);
+      }
     }
 
     appendChatMessage(targetChatId, {
@@ -269,7 +281,12 @@ export function useChatComposer({ onMessageSent }: UseChatComposerArgs) {
         : (customEvent.detail ?? {});
 
       if (detail.text) {
-        setDraftMessage((previous) => (previous ? `${previous}\n\n${detail.text}` : detail.text ?? ''));
+        setDraftMessage((previous) => {
+          const newText = previous ? `${previous}\n\n${detail.text}` : detail.text ?? '';
+          // 直接更新 contentEditable 的 DOM，解决撤销后文本不显示的问题
+          editorRef.current?.setContent(newText);
+          return newText;
+        });
         setDraftNodes((previous) => [
           ...previous,
           { type: 'text', text: previous.length > 0 ? `\n\n${detail.text}` : detail.text ?? '' },

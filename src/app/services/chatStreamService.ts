@@ -8,8 +8,16 @@ export type ChatMessageContentPart =
 export type ChatMessageContent = string | ChatMessageContentPart[];
 
 export interface ChatMessage {
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'tool';
   content: ChatMessageContent;
+  /** DeepSeek 思考模式要求的 reasoning_content 回传字段 */
+  reasoning_content?: string;
+  tool_calls?: Array<{
+    id: string;
+    type: 'function';
+    function: { name: string; arguments: string };
+  }>;
+  tool_call_id?: string;
 }
 
 export interface StreamChatParams {
@@ -19,18 +27,27 @@ export interface StreamChatParams {
   contextWindow?: number;
   temperature?: number;
   maxTokens?: number;
+  /** 开启后端→供应商上游追踪，后端将在 message_done 中附带 upstream_trace */
+  traceUpstream?: boolean;
 }
 
 export type StreamEvent =
   | { event: 'message_start' }
   | { event: 'reasoning_delta'; data: { delta: string } }
   | { event: 'content_delta'; data: { delta: string } }
-  | { event: 'message_done'; data: { usage?: UsageInfo | null } }
+  | { event: 'tool_call_start'; data: { index: number; id: string; name: string } }
+  | { event: 'tool_call_delta'; data: { index: number; arguments: string } }
+  | { event: 'message_done'; data: { usage?: UsageInfo | null; upstream_trace?: { request: { url: string; method: string; headers: Record<string, string>; body: unknown }; events: unknown[] } } }
   | { event: 'error'; data: { code: string; message: string } };
 
 export type UsageInfo = TokenUsage;
 
 export type StreamEventCallback = (event: StreamEvent) => void;
+
+export interface TraceCallback {
+  onRequest: (body: unknown) => void;
+  onResponseEvent: (rawEvent: unknown) => void;
+}
 
 export interface StreamHandle {
   abort: () => void;
@@ -69,12 +86,14 @@ function parseSseBlock(block: string): SseFrame | null {
   return { event, data: dataLines.join('\n') };
 }
 
-function dispatchFrame(frame: SseFrame, onEvent: StreamEventCallback): boolean {
+function dispatchFrame(frame: SseFrame, onEvent: StreamEventCallback, trace?: TraceCallback): boolean {
   const trimmed = frame.data.trim();
   if (trimmed === '[DONE]') return true;
   if (!trimmed) return false;
   try {
     const evt = JSON.parse(trimmed) as StreamEvent;
+    // Record raw response event before processing
+    trace?.onResponseEvent(evt);
     onEvent(evt);
     if (evt.event === 'message_done' || evt.event === 'error') return true;
   } catch {
@@ -87,16 +106,29 @@ export async function streamChat(
   params: StreamChatParams,
   onEvent: StreamEventCallback,
   signal?: AbortSignal,
+  trace?: TraceCallback,
 ): Promise<void> {
   const base = await getBackendBaseUrl();
-  const body = {
+  const body: Record<string, unknown> = {
     modelId: params.modelId,
     providerId: params.providerId,
     messages: params.messages,
-    contextWindow: params.contextWindow ?? 20,
     temperature: params.temperature,
-    maxTokens: params.maxTokens,
   };
+  if (params.maxTokens != null) {
+    body.maxTokens = params.maxTokens;
+  }
+  if (params.traceUpstream) {
+    body.traceUpstream = true;
+  }
+
+  // Record raw request before sending
+  if (trace) {
+    console.log('[Trace] onRequest called, body keys:', Object.keys(body));
+    trace.onRequest(body);
+  } else {
+    console.log('[Trace] No trace callback provided to streamChat');
+  }
 
   let res: Response;
   try {
@@ -141,7 +173,7 @@ export async function streamChat(
   const consumeBlock = (block: string): boolean => {
     const frame = parseSseBlock(block);
     if (!frame) return false;
-    return dispatchFrame(frame, onEvent);
+    return dispatchFrame(frame, onEvent, trace);
   };
 
   try {
