@@ -23,6 +23,11 @@ use tokio::sync::RwLock;
 use walkdir::WalkDir;
 
 use crate::error::AppError;
+use crate::file_history::{
+    self, ChangeKind, ChangeRecord, ChangeSource, FileHistory, FileMeta, MessageId, RecordId,
+    TurnId, VersionId, bytes_to_hex, now_millis,
+};
+use crate::file_history::rollback::with_file_lock;
 use crate::task_store::{CreateTaskRequest, TaskStore, TaskStatus, UpdateTaskRequest};
 
 /// 单次结果中文件内容/搜索命中的字符上限，超出截断。
@@ -146,6 +151,8 @@ fn resolve_path(
 /// - `chat_id`: 当前会话 ID，用于任务工具隔离
 /// - `task_store`: 任务存储
 /// - `workspace_root`: 工作区根路径（可选），用于相对路径解析与越权校验
+/// - `file_history`: 文件回退系统（可选），用于 Write/Edit 的备份与回退
+/// - `turn_message_id`: 当前轮次的消息 ID（可选），提供时触发备份流程
 pub async fn execute_tool(
     tool: &str,
     input: &Value,
@@ -153,13 +160,16 @@ pub async fn execute_tool(
     task_store: &TaskStore,
     workspace_root: Option<&Path>,
     read_tracker: &ReadTracker,
+    file_history: Option<&FileHistory>,
+    turn_message_id: Option<&str>,
 ) -> Result<ToolOutput, AppError> {
     match tool {
-        "Write" => execute_write(input, workspace_root).await,
-        "Edit" => execute_edit(input, workspace_root, chat_id, read_tracker).await,
+        "Write" => execute_write(input, workspace_root, file_history, turn_message_id).await,
+        "Edit" => execute_edit(input, workspace_root, chat_id, read_tracker, file_history, turn_message_id).await,
         "Read" => execute_read(input, workspace_root, chat_id, read_tracker).await,
         "Glob" => execute_glob(input, workspace_root).await,
         "Grep" => execute_grep(input, workspace_root).await,
+        "AskUserQuestion" => execute_ask_user_question(input).await,
         "TaskCreate" => execute_task_create(input, chat_id, task_store).await,
         "TaskUpdate" => execute_task_update(input, chat_id, task_store).await,
         "TaskList" => execute_task_list(input, chat_id, task_store).await,
@@ -173,9 +183,16 @@ pub async fn execute_tool(
 // ─── 文件系统工具 ─────────────────────────────────────────────────────────
 
 /// Write：写入/创建文件。自动创建父目录。
+///
+/// 集成文件回退系统：
+/// - 写入前：读取原文件内容（若存在）创建 pre 版本备份
+/// - 写入后：读取新内容创建 post 版本，append ChangeRecord 到 Journal
+/// - 若 turn_message_id 为 None → 跳过备份（向后兼容）
 async fn execute_write(
     input: &Value,
     workspace_root: Option<&Path>,
+    file_history: Option<&FileHistory>,
+    turn_message_id: Option<&str>,
 ) -> Result<ToolOutput, AppError> {
     let file_path = input
         .get("file_path")
@@ -188,6 +205,14 @@ async fn execute_write(
 
     let resolved = resolve_path(file_path, workspace_root)?;
 
+    // 若提供了 file_history 和 turn_message_id，执行备份流程
+    if let (Some(history), Some(turn_msg_id)) = (file_history, turn_message_id) {
+        return with_file_lock(&resolved, || async {
+            execute_write_with_backup(&resolved, content, history, turn_msg_id).await
+        }).await;
+    }
+
+    // 无备份模式：直接写入
     if let Some(parent) = resolved.parent() {
         if !parent.as_os_str().is_empty() && !parent.exists() {
             tokio::fs::create_dir_all(parent)
@@ -207,15 +232,138 @@ async fn execute_write(
     )))
 }
 
+/// 带备份的 Write 执行流程。
+async fn execute_write_with_backup(
+    resolved: &Path,
+    content: &str,
+    history: &FileHistory,
+    turn_message_id: &str,
+) -> Result<ToolOutput, AppError> {
+    let content_bytes = content.as_bytes();
+
+    // 1. 读取原文件内容（若存在）
+    let (pre_content, file_existed, pre_meta) = match tokio::fs::read(resolved).await {
+        Ok(data) => {
+            let meta = FileMeta::from_path(resolved).unwrap_or_else(|_| FileMeta::tombstone());
+            (Some(data), true, meta)
+        }
+        Err(_) => (None, false, FileMeta::tombstone()),
+    };
+
+    // 2. 创建 pre 版本
+    let pre_version = if file_existed {
+        let pre_data = pre_content.as_ref().unwrap();
+        history.version_store.create_version(pre_data, pre_meta.clone()).await?
+    } else {
+        history.version_store.create_tombstone().await?
+    };
+
+    let pre_hash = bytes_to_hex(&*blake3::hash(&pre_content.as_deref().unwrap_or(&[])).as_bytes());
+    let post_hash = bytes_to_hex(&*blake3::hash(content_bytes).as_bytes());
+
+    // 3. 写入 WAL intent
+    let record_id = RecordId::new();
+    let turn_id = TurnId(turn_message_id.to_string());
+    let message_id = MessageId(turn_message_id.to_string());
+    let kind = if file_existed { ChangeKind::Modify } else { ChangeKind::Create };
+
+    let wal_intent = file_history::WalIntent {
+        record_id: record_id.clone(),
+        turn_id: turn_id.clone(),
+        message_id: message_id.clone(),
+        path: resolved.to_path_buf(),
+        kind: kind.clone(),
+        source: ChangeSource::Agent,
+        pre_hash: pre_hash.clone(),
+        post_hash: post_hash.clone(),
+        pre_version_id: pre_version.id.clone(),
+        post_version_id: None,
+        timestamp: now_millis(),
+        conflicted: false,
+    };
+    history.journal.write_wal_intent(&wal_intent).await?;
+
+    // 4. 执行实际文件写入
+    if let Some(parent) = resolved.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            tokio::fs::create_dir_all(parent)
+                .await
+                .map_err(|e| AppError::ToolExecutionError(format!("创建目录失败：{e}")))?;
+        }
+    }
+    tokio::fs::write(resolved, content)
+        .await
+        .map_err(|e| AppError::ToolExecutionError(format!("写入文件失败：{e}")))?;
+
+    // 5. 创建 post 版本（Phase 2: 自适应存储决策 + 锚点检查）
+    let post_meta = FileMeta::from_path(resolved).unwrap_or_else(|_| FileMeta::tombstone());
+    let config = history.config().await;
+    let mode = config.resolve_mode(resolved);
+    let ctx = history.write_tracker.get_context(resolved).await;
+    let pre_data = pre_content.as_deref().unwrap_or(&[]);
+
+    let post_version = history.version_store.create_version_with_anchor_check(
+        &resolved.to_string_lossy(),
+        &pre_version.id,
+        pre_data,
+        content_bytes,
+        post_meta,
+        &ctx,
+        mode,
+        &config.thresholds,
+        config.anchors.max_hunk_chain_length,
+    ).await?;
+
+    // 记录写入（供 auto_decide 决策树使用）
+    history.write_tracker.record_write(resolved).await;
+
+    // 6. 若 pre 与 post 内容相同 → 跳过，不产生 ChangeRecord
+    if pre_hash == post_hash {
+        history.journal.delete_wal_intent(&record_id).await?;
+        return Ok(ToolOutput::ok(format!(
+            "文件内容未变化：{}",
+            resolved.display()
+        )));
+    }
+
+    // 7. append ChangeRecord
+    let record = ChangeRecord {
+        id: record_id.clone(),
+        turn_id: turn_id.clone(),
+        message_id: message_id.clone(),
+        path_before: if file_existed { Some(resolved.to_path_buf()) } else { None },
+        path_after: Some(resolved.to_path_buf()),
+        kind: kind.clone(),
+        source: ChangeSource::Agent,
+        timestamp: now_millis(),
+        pre: pre_version.id,
+        post: post_version.id,
+    };
+    history.journal.append(record).await?;
+
+    // 8. 删除 WAL intent
+    history.journal.delete_wal_intent(&record_id).await?;
+
+    let bytes = content_bytes.len();
+    Ok(ToolOutput::ok(format!(
+        "已写入 {bytes} 字节到 {}（已备份，可回退）",
+        resolved.display()
+    )))
+}
+
 /// Edit：精确替换文件中的文本。要求 old_string 在文件中唯一，除非 replace_all=true。
 ///
 /// 强制校验：必须先通过 Read 工具读取过文件内容，否则拒绝编辑。
 /// 这样确保模型手中持有最新文件内容，old_string 能准确匹配。
+///
+/// 集成文件回退系统：备份原内容 → 执行替换 → 记录 ChangeRecord
 async fn execute_edit(
     input: &Value,
     workspace_root: Option<&Path>,
     chat_id: &str,
     read_tracker: &ReadTracker,
+    file_history: Option<&FileHistory>,
+    turn_message_id: Option<&str>,
 ) -> Result<ToolOutput, AppError> {
     let file_path = input
         .get("file_path")
@@ -254,6 +402,23 @@ async fn execute_edit(
         )));
     }
 
+    // 若提供了 file_history 和 turn_message_id，执行备份流程
+    if let (Some(history), Some(turn_msg_id)) = (file_history, turn_message_id) {
+        return with_file_lock(&resolved, || async {
+            execute_edit_with_backup(
+                &resolved,
+                old_string,
+                new_string,
+                replace_all,
+                history,
+                turn_msg_id,
+            )
+            .await
+        })
+        .await;
+    }
+
+    // 无备份模式：直接编辑
     let original = tokio::fs::read_to_string(&resolved)
         .await
         .map_err(|e| AppError::ToolExecutionError(format!("读取文件失败：{e}")))?;
@@ -284,6 +449,128 @@ async fn execute_edit(
 
     Ok(ToolOutput::ok(format!(
         "已编辑 {}：替换 {count} 处",
+        resolved.display()
+    )))
+}
+
+/// 带备份的 Edit 执行流程。
+async fn execute_edit_with_backup(
+    resolved: &Path,
+    old_string: &str,
+    new_string: &str,
+    replace_all: bool,
+    history: &FileHistory,
+    turn_message_id: &str,
+) -> Result<ToolOutput, AppError> {
+    // 1. 读取原文件内容
+    let original = tokio::fs::read_to_string(resolved)
+        .await
+        .map_err(|e| AppError::ToolExecutionError(format!("读取文件失败：{e}")))?;
+
+    // 2. 匹配校验
+    let count = original.matches(old_string).count();
+    if count == 0 {
+        return Ok(ToolOutput::err(format!(
+            "未在 {} 中找到匹配文本",
+            resolved.display()
+        )));
+    }
+    if count > 1 && !replace_all {
+        return Ok(ToolOutput::err(format!(
+            "在 {} 中匹配到 {count} 处，但 replace_all=false。请提供更长上下文以唯一定位，或设置 replace_all=true",
+            resolved.display()
+        )));
+    }
+
+    let updated = if replace_all {
+        original.replace(old_string, new_string)
+    } else {
+        original.replacen(old_string, new_string, 1)
+    };
+
+    let original_bytes = original.as_bytes();
+    let updated_bytes = updated.as_bytes();
+
+    // 3. 创建 pre 版本
+    let pre_meta = FileMeta::from_path(resolved).unwrap_or_else(|_| FileMeta::tombstone());
+    let pre_version = history.version_store.create_version(original_bytes, pre_meta.clone()).await?;
+
+    let pre_hash = bytes_to_hex(&*blake3::hash(original_bytes).as_bytes());
+    let post_hash = bytes_to_hex(&*blake3::hash(updated_bytes).as_bytes());
+
+    // 4. 写入 WAL intent
+    let record_id = RecordId::new();
+    let turn_id = TurnId(turn_message_id.to_string());
+    let message_id = MessageId(turn_message_id.to_string());
+
+    let wal_intent = file_history::WalIntent {
+        record_id: record_id.clone(),
+        turn_id: turn_id.clone(),
+        message_id: message_id.clone(),
+        path: resolved.to_path_buf(),
+        kind: ChangeKind::Modify,
+        source: ChangeSource::Agent,
+        pre_hash: pre_hash.clone(),
+        post_hash: post_hash.clone(),
+        pre_version_id: pre_version.id.clone(),
+        post_version_id: None,
+        timestamp: now_millis(),
+        conflicted: false,
+    };
+    history.journal.write_wal_intent(&wal_intent).await?;
+
+    // 5. 执行实际文件写入
+    tokio::fs::write(resolved, &updated)
+        .await
+        .map_err(|e| AppError::ToolExecutionError(format!("写回文件失败：{e}")))?;
+
+    // 6. 创建 post 版本（Phase 2: 自适应存储决策 + 锚点检查）
+    let post_meta = FileMeta::from_path(resolved).unwrap_or_else(|_| FileMeta::tombstone());
+    let config = history.config().await;
+    let mode = config.resolve_mode(resolved);
+    let ctx = history.write_tracker.get_context(resolved).await;
+
+    let post_version = history.version_store.create_version_with_anchor_check(
+        &resolved.to_string_lossy(),
+        &pre_version.id,
+        original_bytes,
+        updated_bytes,
+        post_meta,
+        &ctx,
+        mode,
+        &config.thresholds,
+        config.anchors.max_hunk_chain_length,
+    ).await?;
+
+    // 记录写入（供 auto_decide 决策树使用）
+    history.write_tracker.record_write(resolved).await;
+
+    // 7. 若内容未变化 → 跳过
+    if pre_hash == post_hash {
+        history.journal.delete_wal_intent(&record_id).await?;
+        return Ok(ToolOutput::ok(format!("文件内容未变化：{}", resolved.display())));
+    }
+
+    // 8. append ChangeRecord
+    let record = ChangeRecord {
+        id: record_id.clone(),
+        turn_id: turn_id.clone(),
+        message_id: message_id.clone(),
+        path_before: Some(resolved.to_path_buf()),
+        path_after: Some(resolved.to_path_buf()),
+        kind: ChangeKind::Modify,
+        source: ChangeSource::Agent,
+        timestamp: now_millis(),
+        pre: pre_version.id,
+        post: post_version.id,
+    };
+    history.journal.append(record).await?;
+
+    // 9. 删除 WAL intent
+    history.journal.delete_wal_intent(&record_id).await?;
+
+    Ok(ToolOutput::ok(format!(
+        "已编辑 {}：替换 {count} 处（已备份，可回退）",
         resolved.display()
     )))
 }
@@ -590,6 +877,26 @@ fn glob_to_regex(glob: &str) -> String {
     out
 }
 
+// ─── 用户交互工具 ─────────────────────────────────────────────────────────
+
+/// AskUserQuestion：前端拦截该工具，不会真正调用此后端 handler。
+/// 若因前端未拦截而落到此后端，返回 needsUserInput 标记让前端兜底处理。
+async fn execute_ask_user_question(input: &Value) -> Result<ToolOutput, AppError> {
+    let id = input
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let question = input
+        .get("question")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+
+    Ok(ToolOutput::ok_with(
+        format!("AskUserQuestion [{id}]: {question}"),
+        json!({ "needsUserInput": true, "askId": id, "question": question }),
+    ))
+}
+
 // ─── 任务管理工具 ─────────────────────────────────────────────────────────
 
 async fn execute_task_create(
@@ -718,8 +1025,10 @@ pub async fn execute_and_serialize(
     task_store: &TaskStore,
     workspace_root: Option<&Path>,
     read_tracker: &ReadTracker,
+    file_history: &FileHistory,
+    turn_message_id: Option<&str>,
 ) -> Result<Value, AppError> {
-    let result = execute_tool(tool, input, chat_id, task_store, workspace_root, read_tracker).await?;
+    let result = execute_tool(tool, input, chat_id, task_store, workspace_root, read_tracker, Some(file_history), turn_message_id).await?;
     let output = truncate(result.output);
     Ok(json!({
         "output": output,
@@ -849,6 +1158,47 @@ pub fn get_tools_schema() -> Vec<ToolDefinition> {
                     }
                 },
                 "required": ["pattern"],
+                "additionalProperties": false
+            }),
+        ),
+        // ── 用户交互工具 ──
+        task_tool(
+            "AskUserQuestion",
+            "Ask the user a question and wait for their response. Output STOPS after this call — the system will present the question to the user and wait. Use this whenever you need clarification, choices, or user input to proceed. Supports three modes: choice (with options array), fill-in-the-blank (with requiresText only), or choice+other (with both options and requiresText).",
+            json!({
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Unique identifier for this question (e.g., 'q1')"
+                    },
+                    "question": {
+                        "type": "string",
+                        "description": "The question text to present to the user"
+                    },
+                    "options": {
+                        "type": "array",
+                        "description": "Preset choices (omit for text-only mode)",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": { "type": "string", "description": "Option identifier" },
+                                "label": { "type": "string", "description": "Display text" }
+                            },
+                            "required": ["id", "label"],
+                            "additionalProperties": false
+                        }
+                    },
+                    "allowMultiple": {
+                        "type": "boolean",
+                        "description": "Allow multiple selections (default: false)"
+                    },
+                    "requiresText": {
+                        "type": "boolean",
+                        "description": "Show text input alongside or instead of options (default: false)"
+                    }
+                },
+                "required": ["id", "question"],
                 "additionalProperties": false
             }),
         ),

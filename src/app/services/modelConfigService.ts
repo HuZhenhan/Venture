@@ -14,7 +14,6 @@ export interface AddProviderParams {
   baseUrl: string;
   apiKey: string;
   models: AIModel[];
-  inputContextWindow: number;
   outputContextWindow: number;
 }
 
@@ -23,7 +22,6 @@ export interface UpdateProviderParams {
   baseUrl?: string;
   apiKey?: string;
   models?: AIModel[];
-  inputContextWindow?: number;
   outputContextWindow?: number;
 }
 

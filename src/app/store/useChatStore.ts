@@ -1,12 +1,46 @@
 import { create } from 'zustand';
-import { APIConfig, Chat, ChatMode, ComposerDraftNode, ComposerReference, Message, Task, TraceRecord } from '../types';
+import { APIConfig, Chat, ChatMode, ComposerDraftNode, ComposerReference, Message, Task, ToolPermissionLevel, ToolPermissionsByMode, TraceRecord } from '../types';
 import { appendMessageToChat, updateChatEntry, updateChatMessagesInList } from './chatState';
 import { listProviders } from '../services/modelConfigService';
 import { patchAppData } from '../services/appDataService';
 import { debugLog, debugError } from '../utils/debugLogger';
+import { TOOL_PERMISSION_OPTIONS } from '../utils/toolPermissions';
 
 const CHATS_STORAGE_KEY = 'venture-chats';
 const ACTIVE_CHAT_ID_STORAGE_KEY = 'venture-active-chat-id';
+const PRESELECTED_MODE_STORAGE_KEY = 'venture-preselected-mode';
+const PRESELECTED_PERMISSIONS_STORAGE_KEY = 'venture-preselected-permissions';
+
+function readStoredPreSelectedMode(): ChatMode {
+  if (typeof window === 'undefined') return 'agent';
+  try {
+    const raw = window.localStorage.getItem(PRESELECTED_MODE_STORAGE_KEY);
+    if (raw === 'agent' || raw === 'plan' || raw === 'yolo') return raw;
+    return 'agent';
+  } catch {
+    return 'agent';
+  }
+}
+
+function readStoredPreSelectedPermissions(): ToolPermissionsByMode {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(PRESELECTED_PERMISSIONS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as ToolPermissionsByMode;
+    // 校验每个模式的权限级别合法（不在可选范围内则丢弃）
+    const result: ToolPermissionsByMode = {};
+    (Object.keys(parsed) as ChatMode[]).forEach((mode) => {
+      const level = parsed[mode];
+      if (level && TOOL_PERMISSION_OPTIONS[mode]?.includes(level)) {
+        result[mode] = level;
+      }
+    });
+    return result;
+  } catch {
+    return {};
+  }
+}
 
 function readStoredChats(): Chat[] {
   if (typeof window === 'undefined') return [];
@@ -166,6 +200,8 @@ function persistActiveChatId(id: string | null) {
 
 const initialChats = readStoredChats();
 const initialActiveChatId = readStoredActiveChatId(initialChats);
+const initialPreSelectedMode = readStoredPreSelectedMode();
+const initialPreSelectedPermissions = readStoredPreSelectedPermissions();
 
 interface GenerationSession {
   chatId: string;
@@ -181,6 +217,8 @@ interface ChatState {
   generationSession: GenerationSession | null;
   currentTasks: Task[];
   preSelectedMode: ChatMode;
+  /** 新会话（尚无 activeChat 时）预选的各模式权限级别。 */
+  preSelectedPermissions: ToolPermissionsByMode;
   draftMessage: string;
   draftNodes: ComposerDraftNode[];
   draftReferences: ComposerReference[];
@@ -202,6 +240,12 @@ interface ChatState {
   setGenerationSession: (session: GenerationSession | null) => void;
   setCurrentTasks: (tasks: Task[] | ((prev: Task[]) => Task[])) => void;
   setPreSelectedMode: (mode: ChatMode) => void;
+  /** 设置新会话预选权限（某模式下）。 */
+  setPreSelectedPermission: (mode: ChatMode, level: ToolPermissionLevel) => void;
+  /** 设置会话在某模式下的权限级别（随会话持久化）。 */
+  setChatPermission: (id: string, mode: ChatMode, level: ToolPermissionLevel) => void;
+  /** 追加"一律同意"白名单签名（随会话持久化，去重）。 */
+  addApprovedToolSignature: (id: string, signature: string) => void;
   setDraftMessage: (msg: string | ((prev: string) => string)) => void;
   setDraftNodes: (nodes: ComposerDraftNode[] | ((prev: ComposerDraftNode[]) => ComposerDraftNode[])) => void;
   setDraftReferences: (references: ComposerReference[] | ((prev: ComposerReference[]) => ComposerReference[])) => void;
@@ -235,7 +279,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
   generatingChatId: null,
   generationSession: null,
   currentTasks: [],
-  preSelectedMode: 'agent',
+  preSelectedMode: initialPreSelectedMode,
+  preSelectedPermissions: initialPreSelectedPermissions,
   draftMessage: '',
   draftNodes: [],
   draftReferences: [],
@@ -280,7 +325,45 @@ export const useChatStore = create<ChatState>((set, get) => ({
     currentTasks: typeof tasks === 'function' ? tasks(state.currentTasks) : tasks
   })),
   
-  setPreSelectedMode: (mode) => set({ preSelectedMode: mode }),
+  setPreSelectedMode: (mode) => {
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(PRESELECTED_MODE_STORAGE_KEY, mode);
+      } catch {
+      }
+    }
+    set({ preSelectedMode: mode });
+  },
+
+  setPreSelectedPermission: (mode, level) => set((state) => {
+    const preSelectedPermissions = { ...state.preSelectedPermissions, [mode]: level };
+    if (typeof window !== 'undefined') {
+      try {
+        window.localStorage.setItem(PRESELECTED_PERMISSIONS_STORAGE_KEY, JSON.stringify(preSelectedPermissions));
+      } catch {
+      }
+    }
+    return { preSelectedPermissions };
+  }),
+
+  setChatPermission: (id, mode, level) => set((state) => {
+    const chats = updateChatEntry(state.chats, id, (chat) => ({
+      ...chat,
+      permissions: { ...(chat.permissions ?? {}), [mode]: level },
+    }));
+    persistChats(chats);
+    return { chats };
+  }),
+
+  addApprovedToolSignature: (id, signature) => set((state) => {
+    const chats = updateChatEntry(state.chats, id, (chat) => {
+      const existing = chat.approvedToolCalls ?? [];
+      if (existing.includes(signature)) return chat;
+      return { ...chat, approvedToolCalls: [...existing, signature] };
+    });
+    persistChats(chats);
+    return { chats };
+  }),
   
   setDraftMessage: (msg) => set((state) => ({
     draftMessage: typeof msg === 'function' ? msg(state.draftMessage) : msg

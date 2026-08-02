@@ -35,6 +35,7 @@ const TOOL_ICON_MAP: Record<string, React.ComponentType<{ size?: number; classNa
   TaskUpdate: RefreshCw,
   TaskList: ListIcon,
   TaskGet: Eye,
+  AskUserQuestion: Eye,
 };
 
 function getToolIcon(name: string) {
@@ -46,9 +47,11 @@ const STATUS_META: Record<ToolCallStatus, { label: string; icon: React.Component
   running: { label: '执行中', icon: Loader2 },
   completed: { label: '已完成', icon: Check },
   failed: { label: '失败', icon: CircleAlert },
+  needs_user_input: { label: '等待回复', icon: CircleAlert },
+  needs_approval: { label: '待授权', icon: CircleAlert },
 };
 
-function formatInput(input: unknown): string {
+export function formatInput(input: unknown): string {
   if (input === null || input === undefined) return '';
   if (typeof input === 'string') return input;
   try {
@@ -64,7 +67,7 @@ function truncateForHeader(text: string, max = 60): string {
   return `${trimmed.slice(0, max)}…`;
 }
 
-function inputSummary(tool: ToolCall): string {
+export function inputSummary(tool: ToolCall): string {
   const input = (tool.input ?? {}) as Record<string, unknown>;
   if (typeof input !== 'object' || input === null) return '';
 
@@ -84,6 +87,8 @@ function inputSummary(tool: ToolCall): string {
       return typeof input.taskId === 'string' ? `#${input.taskId}` : '';
     case 'TaskList':
       return '';
+    case 'AskUserQuestion':
+      return typeof input.question === 'string' ? input.question : '';
     default:
       return '';
   }
@@ -94,7 +99,7 @@ export function ToolCallCard({ tool }: ToolCallCardProps) {
   const styles = getToolCardClasses(isExpanded);
 
   const ToolIcon = getToolIcon(tool.name);
-  const statusMeta = STATUS_META[tool.status];
+  const statusMeta = STATUS_META[tool.status] ?? STATUS_META.pending;
   const StatusIcon = statusMeta.icon;
   const isRunning = tool.status === 'running';
   const isError = tool.status === 'failed';

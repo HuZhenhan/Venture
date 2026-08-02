@@ -214,6 +214,7 @@ export function useChatComposer({ onMessageSent }: UseChatComposerArgs) {
         id: crypto.randomUUID(),
         title: getComposerTitle(trimmedInput, draftReferences),
         mode: preSelectedMode,
+        permissions: { ...useChatStore.getState().preSelectedPermissions },
         messages: [],
       };
       addChat(newChat);

@@ -24,7 +24,6 @@ export interface StreamChatParams {
   modelId: string;
   providerId?: string;
   messages: ChatMessage[];
-  contextWindow?: number;
   temperature?: number;
   maxTokens?: number;
   /** 开启后端→供应商上游追踪，后端将在 message_done 中附带 upstream_trace */

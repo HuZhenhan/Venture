@@ -55,7 +55,6 @@ async function requestGeneratedTitle(modelId: string, userPrompt: string): Promi
     {
       modelId,
       messages,
-      contextWindow: 2,
       temperature: 0.2,
       maxTokens: 200,
     },

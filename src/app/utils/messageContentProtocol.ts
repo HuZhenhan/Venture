@@ -1,12 +1,10 @@
-import { AskForm, AskOption, ComposerReference, ContentBlock, Message, ResourceComposerReference, UploadedResource } from '../types';
+import { ComposerReference, ContentBlock, Message, ResourceComposerReference, ToolCall, AskForm, UploadedResource } from '../types';
 import { isUploadedResourceReference } from './uploadedResources';
 
 export type MessageContentTag =
   | 'thinking' | 'error' | 'attachment'
   | 'code' | 'time' | 'message' | 'suggestion' | 'title'
-  | 'id' | 'name' | 'mime' | 'size' | 'kind' | 'text' | 'data'
-  | 'ask' | 'question' | 'option' | 'label' | 'answer' | 'selected' | 'multiple' | 'textinput' | 'skipped'
-  | 'reply';
+  | 'id' | 'name' | 'mime' | 'size' | 'kind' | 'text' | 'data';
 
 export type MessageContentNode =
   | { type: 'text'; content: string }
@@ -15,8 +13,6 @@ export type MessageContentNode =
 const TAG_NAMES: readonly MessageContentTag[] = [
   'thinking', 'error', 'attachment', 'code', 'time', 'message', 'suggestion', 'title',
   'id', 'name', 'mime', 'size', 'kind', 'text', 'data',
-  'ask', 'question', 'option', 'label', 'answer', 'selected', 'multiple', 'textinput', 'skipped',
-  'reply',
 ];
 const TAG_NAME_SET = new Set<string>(TAG_NAMES);
 const TAG_PATTERN = /\[\/?([a-z]+)]/g;
@@ -137,7 +133,7 @@ function uploadedReferences(blocks?: ContentBlock[]): ComposerReference[] {
 }
 
 export function adaptLegacyMessageContent(message: Message): string {
-  if (/\[(?:thinking|error|attachment|ask)]/.test(message.content)) return message.content;
+  if (/\[(?:thinking|error|attachment)]/.test(message.content)) return message.content;
   const protocolParts: string[] = [];
   const blocks = message.blocks ?? [];
   const textBlocks = blocks.filter((block) => block.type === 'text');
@@ -148,10 +144,6 @@ export function adaptLegacyMessageContent(message: Message): string {
       protocolParts.push(createTaggedContent('thinking', `${title}${block.content}`));
     } else if (block.type === 'text') {
       protocolParts.push(block.content);
-    } else if (block.type === 'ask') {
-      protocolParts.push(serializeAsk(block.ask));
-    } else if (block.type === 'tool_call') {
-      // 工具调用已迁移到 message.toolCalls，不再序列化为协议标签
     }
   }
   uploadedReferences(blocks).forEach((reference) => protocolParts.push(serializeAttachment(reference.resource)));
@@ -161,7 +153,7 @@ export function adaptLegacyMessageContent(message: Message): string {
 
 export function getResidualMessageBlocks(message: Message): ContentBlock[] {
   return (message.blocks ?? []).flatMap((block) => {
-    if (block.type === 'text' || block.type === 'reasoning' || block.type === 'ask' || block.type === 'tool_call') return [];
+    if (block.type === 'text' || block.type === 'reasoning' || block.type === 'tool_call') return [];
     if (block.type !== 'reference_list') return [block];
     const references = block.references.filter((reference) => !isUploadedResourceReference(reference));
     return references.length > 0 ? [{ ...block, references }] : [];
@@ -188,7 +180,6 @@ export function getVisibleText(content: string): string {
     if (node.type === 'text') return node.content;
     if (node.name === 'thinking' || node.name === 'attachment') return '';
     if (node.name === 'error') return childText(node, 'message') || getNodeText(node);
-    if (node.name === 'ask') return formatAskVisibleText(node);
     return getNodeText(node);
   }).join('').trim();
 }
@@ -224,178 +215,51 @@ export function parseErrorNode(node: MessageContentNode): StructuredError | null
   };
 }
 
-// ─── Ask Tool (question/answer protocol) ─────────────────────────────────────
+// ─── AskUserQuestion Tool Call → AskForm 构造 ─────────────────────────────
 
-export function serializeAsk(ask: AskForm): string {
-  const parts: string[] = [
-    field('id', ask.id),
-    field('question', ask.question),
-  ];
-  if (ask.options) {
-    for (const opt of ask.options) {
-      parts.push(createTaggedContent('option', [
-        field('id', opt.id),
-        field('label', opt.label),
-      ].join('')));
-    }
-  }
-  if (ask.allowMultiple) parts.push(createTaggedContent('multiple', '1'));
-  if (ask.requiresText) parts.push(createTaggedContent('textinput', '1'));
-  if (ask.status === 'answered' && ask.answer) {
-    const answerParts: string[] = [];
-    if (ask.answer.selectedOptions) {
-      for (const optId of ask.answer.selectedOptions) {
-        answerParts.push(field('selected', optId));
-      }
-    }
-    if (ask.answer.text) answerParts.push(field('text', ask.answer.text));
-    parts.push(createTaggedContent('answer', answerParts.join('')));
-  } else if (ask.status === 'skipped') {
-    parts.push(createTaggedContent('skipped', '1'));
-  }
-  return createTaggedContent('ask', parts.join(''));
-}
+/** 根据 ToolCall 输入构造 AskForm，供现有 AskCard/AskCardFull/AskCardInline 组件复用。 */
+export function toolCallToAskForm(tool: ToolCall): AskForm | null {
+  const input = tool.input as Record<string, unknown> | null;
+  if (!input || typeof input !== 'object') return null;
 
-export function parseAskNode(node: MessageContentNode): AskForm | null {
-  if (node.type !== 'tag' || node.name !== 'ask') return null;
-  const id = decodeField(node, 'id');
-  const question = decodeField(node, 'question');
-  if (!id || !question) return null;
+  const id = typeof input.id === 'string' ? input.id : tool.id;
+  const question = typeof input.question === 'string' ? input.question : '';
+  if (!question) return null;
 
-  const options: AskOption[] = node.children
-    .filter((child): child is Extract<MessageContentNode, { type: 'tag' }> => child.type === 'tag' && child.name === 'option')
-    .map((optNode) => ({
-      id: decodeField(optNode, 'id'),
-      label: decodeField(optNode, 'label'),
-    }))
-    .filter((opt) => opt.id && opt.label);
+  const optionsList = Array.isArray(input.options)
+    ? (input.options as Array<{ id: string; label: string }>)
+        .filter((opt) => opt && typeof opt.id === 'string' && typeof opt.label === 'string')
+        .map((opt) => ({ id: opt.id, label: opt.label }))
+    : [];
 
-  const allowMultiple = childText(node, 'multiple').trim() === '1';
-  const requiresText = childText(node, 'textinput').trim() === '1';
+  const isSkipped = tool.output === '[skipped]';
+  const isNeedsInput = tool.status === 'needs_user_input';
 
-  const answerNode = node.children.find(
-    (child): child is Extract<MessageContentNode, { type: 'tag' }> => child.type === 'tag' && child.name === 'answer',
-  );
-
-  const skippedNode = node.children.find(
-    (child): child is Extract<MessageContentNode, { type: 'tag' }> => child.type === 'tag' && child.name === 'skipped',
-  );
-
-  let status: AskForm['status'] = 'pending';
+  let status: AskForm['status'] = 'answered';
   let answer: AskForm['answer'] | undefined;
 
-  if (skippedNode && childText(skippedNode, '').trim() === '1') {
+  if (isSkipped) {
     status = 'skipped';
-  } else if (answerNode) {
-    status = 'answered';
-    const selectedOptions = answerNode.children
-      .filter((child): child is Extract<MessageContentNode, { type: 'tag' }> => child.type === 'tag' && child.name === 'selected')
-      .map((child) => {
-        const value = getNodeText(child);
-        try { return decodeURIComponent(value); } catch { return value; }
-      })
-      .filter(Boolean);
-    const text = decodeField(answerNode, 'text');
-    answer = {
-      selectedOptions: selectedOptions.length > 0 ? selectedOptions : undefined,
-      text: text || undefined,
-    };
+  } else if (isNeedsInput) {
+    status = 'pending';
+  } else if (tool.status === 'completed' && typeof tool.output === 'object' && tool.output !== null) {
+    const out = tool.output as Record<string, unknown>;
+    if (Array.isArray(out.selectedOptions) || typeof out.text === 'string') {
+      answer = {
+        selectedOptions: Array.isArray(out.selectedOptions) ? out.selectedOptions as string[] : undefined,
+        text: typeof out.text === 'string' ? out.text : undefined,
+      };
+    }
   }
 
   return {
     id,
     question,
-    options: options.length > 0 ? options : undefined,
-    allowMultiple: allowMultiple || undefined,
-    requiresText: requiresText || undefined,
+    options: optionsList.length > 0 ? optionsList : undefined,
+    allowMultiple: input.allowMultiple === true ? true : undefined,
+    requiresText: input.requiresText === true ? true : undefined,
     status,
     answer,
   };
-}
-
-export function getAskForms(content: string): AskForm[] {
-  return parseMessageContent(content)
-    .map(parseAskNode)
-    .filter((ask): ask is AskForm => ask !== null);
-}
-
-export function setAskAnswer(
-  content: string,
-  askId: string,
-  answer: { selectedOptions?: string[]; text?: string },
-): string {
-  const nodes = parseMessageContent(content);
-  for (const node of nodes) {
-    if (node.type !== 'tag' || node.name !== 'ask') continue;
-    if (decodeField(node, 'id') !== askId) continue;
-
-    // Remove any existing answer or skipped tags
-    node.children = node.children.filter(
-      (child) => !(child.type === 'tag' && (child.name === 'answer' || child.name === 'skipped')),
-    );
-
-    const answerChildren: MessageContentNode[] = [];
-    if (answer.selectedOptions) {
-      for (const optId of answer.selectedOptions) {
-        answerChildren.push({
-          type: 'tag',
-          name: 'selected',
-          children: [{ type: 'text', content: encodeURIComponent(optId) }],
-        });
-      }
-    }
-    if (answer.text) {
-      answerChildren.push({
-        type: 'tag',
-        name: 'text',
-        children: [{ type: 'text', content: encodeURIComponent(answer.text) }],
-      });
-    }
-    node.children.push({ type: 'tag', name: 'answer', children: answerChildren });
-    break;
-  }
-  return serializeContentNodes(nodes);
-}
-
-export function skipAsk(content: string, askId: string): string {
-  const nodes = parseMessageContent(content);
-  for (const node of nodes) {
-    if (node.type !== 'tag' || node.name !== 'ask') continue;
-    if (decodeField(node, 'id') !== askId) continue;
-
-    // Remove any existing answer or skipped tags
-    node.children = node.children.filter(
-      (child) => !(child.type === 'tag' && (child.name === 'answer' || child.name === 'skipped')),
-    );
-
-    node.children.push({ type: 'tag', name: 'skipped', children: [{ type: 'text', content: '1' }] });
-    break;
-  }
-  return serializeContentNodes(nodes);
-}
-
-function formatAskVisibleText(node: MessageContentNode): string {
-  const ask = parseAskNode(node);
-  if (!ask) return '';
-  if (ask.status === 'answered' && ask.answer) {
-    const selectedLabels = (ask.answer.selectedOptions || [])
-      .map((id) => ask.options?.find((o) => o.id === id)?.label || id);
-    const parts: string[] = [
-      field('question', ask.question),
-    ];
-    if (selectedLabels.length > 0) parts.push(field('answer', selectedLabels.join(', ')));
-    if (ask.answer.text) parts.push(field('text', ask.answer.text));
-    return createTaggedContent('reply', parts.join(''));
-  } else if (ask.status === 'skipped') {
-    return createTaggedContent('reply', [
-      field('question', ask.question),
-      field('skipped', '1'),
-    ].join(''));
-  }
-  // Pending ask (should not normally be sent to model, but just in case)
-  return createTaggedContent('reply', [
-    field('question', ask.question),
-    field('status', 'pending'),
-  ].join(''));
 }
 

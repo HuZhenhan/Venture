@@ -42,12 +42,6 @@ export const UsagePanel: React.FC<UsagePanelProps> = ({
   const lastOutputTokens = lastUsageMessage?.usage?.completion_tokens ?? 0;
   const lastTotalTokens = lastUsageMessage?.usage?.total_tokens ?? (lastPromptTokens + lastOutputTokens);
 
-  const contextWindowK = apiConfigs.length > 0
-    ? Math.max(...apiConfigs.map((c) => c.inputContextWindow ?? 0))
-    : 0;
-  const contextWindowTokens = contextWindowK * 1000;
-  const contextUsageRate = contextWindowTokens > 0 ? Math.min(100, Math.round((lastTotalTokens / contextWindowTokens) * 100)) : 0;
-
   const totalDisplay = formatTokenCount(totalTokens);
   const inputDisplay = formatTokenCount(inputTokens);
   const outputDisplay = formatTokenCount(outputTokens);
@@ -77,26 +71,6 @@ export const UsagePanel: React.FC<UsagePanelProps> = ({
                 <div className="text-[32px] leading-none font-semibold tracking-tighter text-foreground font-mono mt-2">
                   {totalDisplay.value}<span className="text-[16px] text-muted-foreground ml-0.5 font-medium">{totalDisplay.suffix} tokens</span>
                 </div>
-              </div>
-
-              {/* Minimalist Ring */}
-              <div className="w-14 h-14 relative flex items-center justify-center shrink-0">
-                <svg viewBox="0 0 36 36" className="w-full h-full -rotate-90">
-                  <circle cx="18" cy="18" r="15" fill="none" stroke="currentColor" className="text-black/[0.04]" strokeWidth="3" />
-                  <motion.circle 
-                    cx="18" cy="18" r="15" 
-                    fill="none" 
-                    stroke="currentColor" 
-                    className="text-foreground"
-                    strokeWidth="3" 
-                    strokeLinecap="round" 
-                    strokeDasharray="94.2" 
-                    initial={{ strokeDashoffset: 94.2 }}
-                    animate={{ strokeDashoffset: 94.2 * (1 - contextUsageRate / 100) }}
-                    transition={{ duration: 1.5, ease: [0.16, 1, 0.3, 1], delay: 0.2 }}
-                  />
-                </svg>
-                <span className="absolute inset-0 flex items-center justify-center text-[11px] font-bold font-mono text-foreground">{contextUsageRate}%</span>
               </div>
             </div>
 

@@ -24,8 +24,9 @@ import { ErrorBoundary } from '../../ui/ErrorBoundary';
 import { usePreferencesStore } from '../../../store/usePreferencesStore';
 import { useChatStore } from '../../../store/useChatStore';
 import { useLayoutStore } from '../../../store/useLayoutStore';
-import { getResidualMessageBlocks, getAskForms, adaptLegacyMessageContent } from '../../../utils/messageContentProtocol';
+import { getResidualMessageBlocks } from '../../../utils/messageContentProtocol';
 import { MessageContentRenderer } from './MessageContentRenderer';
+import { MessageTextSelectionMenu } from './MessageTextSelectionMenu';
 
 export const ScrollRootCtx = createContext<React.MutableRefObject<HTMLDivElement | null>>({ current: null });
 
@@ -69,6 +70,9 @@ interface MessageItemProps {
   onRejectFileOp: (messageId: string, fileOpId: string) => void;
   onUpdateAskBlock: (messageId: string, askId: string, answer: { selectedOptions?: string[]; text?: string }) => void;
   onSkipAskBlock: (messageId: string, askId: string) => void;
+  onApproveToolCall: (messageId: string, toolId: string) => void;
+  onAlwaysApproveToolCall: (messageId: string, toolId: string) => void;
+  onRejectToolCall: (messageId: string, toolId: string) => void;
   onMarkdownComplete: (messageId: string) => void;
 }
 
@@ -115,7 +119,8 @@ function UserTextWithReferencePills({
 
   const referenceByLabel = new Map(references.map((reference) => [reference.label, reference]));
   const segments: React.ReactNode[] = [];
-  const pattern = /【资源: ([^】]+)】/g;
+  // 兼容旧格式【资源: x】与新格式【用户引用了内容：x】（冒号全角/半角）
+  const pattern = /【(?:资源|用户引用了[^】：:]*)[：:]([^】]+)】/g;
   let cursor = 0;
   let match: RegExpExecArray | null;
 
@@ -410,13 +415,15 @@ const MessageBlock = memo(function MessageBlock({
       const references = getMessageReferences(message);
       return (
         <div className="flex justify-end">
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }} className="inline-block rounded-2xl rounded-tr-sm bg-muted/80 px-5 py-3 text-left text-[16px] font-medium leading-[1.6] tracking-tight text-foreground select-text whitespace-pre-wrap break-words">
-            <UserTextWithReferencePills
-              content={block.content}
-              references={references}
-              onOpenComposerReference={onOpenComposerReference}
-            />
-          </motion.div>
+          <MessageTextSelectionMenu>
+            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }} className="inline-block rounded-2xl rounded-tr-sm bg-muted/80 px-5 py-3 text-left text-[16px] font-medium leading-[1.6] tracking-tight text-foreground select-text whitespace-pre-wrap break-words">
+              <UserTextWithReferencePills
+                content={block.content}
+                references={references}
+                onOpenComposerReference={onOpenComposerReference}
+              />
+            </motion.div>
+          </MessageTextSelectionMenu>
         </div>
       );
     }
@@ -431,9 +438,11 @@ const MessageBlock = memo(function MessageBlock({
     }
 
     return (
-      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }} className="group/msg relative select-text">
-        <MarkdownContent content={block.content} status={isLastBlock ? message.status : 'done'} onComplete={() => onMarkdownComplete(message.id)} className="ml-2" />
-      </motion.div>
+      <MessageTextSelectionMenu>
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }} className="group/msg relative select-text">
+          <MarkdownContent content={block.content} status={isLastBlock ? message.status : 'done'} onComplete={() => onMarkdownComplete(message.id)} className="ml-2" />
+        </motion.div>
+      </MessageTextSelectionMenu>
     );
   }
 
@@ -448,19 +457,12 @@ const UsageTooltip = memo(function UsageTooltip({ message }: { message: Message 
   const apiConfigs = useChatStore((state) => state.apiConfigs);
   const activeChat = useChatStore((state) => state.getActiveChat());
 
-  const contextWindowK = apiConfigs.length > 0
-    ? Math.max(...apiConfigs.map((c) => c.inputContextWindow ?? 0))
-    : 0;
-  const contextWindowTokens = contextWindowK * 1000;
-
   const usageMessages = activeChat?.messages.filter((m) => m.role === 'ai' && m.usage) ?? [];
   const convInputTokens = usageMessages.reduce((sum, m) => sum + (m.usage?.prompt_tokens ?? 0), 0);
   const convOutputTokens = usageMessages.reduce((sum, m) => sum + (m.usage?.completion_tokens ?? 0), 0);
   const convCachedTokens = usageMessages.reduce((sum, m) => sum + getCachedTokens(m), 0);
   const convCacheMissTokens = usageMessages.reduce((sum, m) => sum + (m.usage?.prompt_cache_miss_tokens ?? 0), 0);
   const convCacheHitRate = convInputTokens > 0 ? Math.round((convCachedTokens / convInputTokens) * 100) : 0;
-  const lastTotalTokens = (message.usage?.total_tokens ?? ((message.usage?.prompt_tokens ?? 0) + (message.usage?.completion_tokens ?? 0)));
-  const contextUsageRate = contextWindowTokens > 0 ? Math.min(100, Math.round((lastTotalTokens / contextWindowTokens) * 100)) : 0;
 
   const thisInput = message.usage?.prompt_tokens ?? 0;
   const thisOutput = message.usage?.completion_tokens ?? 0;
@@ -495,16 +497,7 @@ const UsageTooltip = memo(function UsageTooltip({ message }: { message: Message 
       >
         <svg viewBox="0 0 36 36" className="h-[14px] w-[14px] -rotate-90">
           <circle cx="18" cy="18" r="14" fill="none" stroke="currentColor" strokeWidth="4" className="opacity-20" />
-          <motion.circle
-            cx="18" cy="18" r="14"
-            fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round"
-            strokeDasharray="88"
-            initial={{ strokeDashoffset: 88 }}
-            animate={{ strokeDashoffset: 88 * (1 - contextUsageRate / 100) }}
-            transition={{ duration: 0.9, ease: APPLE_CURVE }}
-          />
         </svg>
-        <span className="font-mono text-[11px] font-medium">{contextUsageRate}%</span>
       </motion.div>
       <AnimatePresence>
         {isOpen ? (
@@ -541,12 +534,6 @@ const UsageTooltip = memo(function UsageTooltip({ message }: { message: Message 
                   <span className="font-mono font-medium text-foreground">{convCacheHitRate}%</span>
                 </div>
               )}
-              {contextWindowTokens > 0 && (
-                <div className="flex justify-between px-2 py-1 text-[11px]">
-                  <span className="text-muted-foreground">上下文使用率</span>
-                  <span className="font-mono font-medium text-foreground">{contextUsageRate}%</span>
-                </div>
-              )}
             </div>
           </motion.div>
         ) : null}
@@ -574,6 +561,9 @@ export const MessageItem = memo(function MessageItem({
   onRejectFileOp,
   onUpdateAskBlock,
   onSkipAskBlock,
+  onApproveToolCall,
+  onAlwaysApproveToolCall,
+  onRejectToolCall,
   onMarkdownComplete,
 }: MessageItemProps) {
   const [isHovered, setIsHovered] = useState(false);
@@ -610,7 +600,7 @@ export const MessageItem = memo(function MessageItem({
     message.role === 'ai' &&
     message.status === 'done' &&
     !isGenerating &&
-    !getAskForms(adaptLegacyMessageContent(message)).some((ask) => ask.status === 'pending') &&
+    !(message.toolCalls ?? []).some((tc) => tc.status === 'needs_user_input' || tc.status === 'needs_approval') &&
     !message.blocks?.some(
       (block) => block.type === 'file_op' && block.fileOp.status === 'requires_confirmation'
     );
@@ -682,6 +672,9 @@ export const MessageItem = memo(function MessageItem({
                 onMarkdownComplete={onMarkdownComplete}
                 onUpdateAskBlock={onUpdateAskBlock}
                 onSkipAskBlock={onSkipAskBlock}
+                onApproveToolCall={onApproveToolCall}
+                onAlwaysApproveToolCall={onAlwaysApproveToolCall}
+                onRejectToolCall={onRejectToolCall}
                 showReasoningTitle={autoGenerateReasoningTitles}
               />
               {residualBlocks.map((block, index) => (

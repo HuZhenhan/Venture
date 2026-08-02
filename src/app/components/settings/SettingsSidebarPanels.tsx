@@ -53,7 +53,6 @@ interface ProviderFormData {
   baseUrl: string;
   apiKey: string;
   models: AIModel[];
-  inputContextWindow: number;
   outputContextWindow: number;
 }
 
@@ -270,6 +269,7 @@ export function ProviderLibraryPanel({
 }: ProviderLibraryPanelProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingConfig, setEditingConfig] = useState<APIConfig | null>(null);
+  const [pendingDeleteConfig, setPendingDeleteConfig] = useState<APIConfig | null>(null);
   const { loadApiConfigs, setApiConfigs } = useChatStore();
 
   const handleOpenAddModal = () => {
@@ -289,6 +289,13 @@ export function ProviderLibraryPanel({
     } catch {
       setApiConfigs((prev) => prev.filter((c) => c.id !== id));
     }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!pendingDeleteConfig) return;
+    const id = pendingDeleteConfig.id;
+    setPendingDeleteConfig(null);
+    await handleDeleteConfig(id);
   };
 
   const handleToggleModel = async (configId: string, modelId: string) => {
@@ -360,7 +367,10 @@ export function ProviderLibraryPanel({
                           <Edit2 size={14} />
                         </button>
                         <button
-                          onClick={() => handleDeleteConfig(config.id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPendingDeleteConfig(config);
+                          }}
                           className="rounded-lg p-1.5 text-muted-foreground opacity-0 transition-all hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
                         >
                           <Trash2 size={14} />
@@ -423,6 +433,49 @@ export function ProviderLibraryPanel({
         editingConfig={editingConfig}
         onClose={() => setIsModalOpen(false)}
       />
+
+      {/* 删除供应商确认弹窗 */}
+      <AnimatePresence>
+        {pendingDeleteConfig ? (
+          <div className="fixed inset-0 z-[999] flex items-center justify-center p-6">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setPendingDeleteConfig(null)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-md"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 30 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 30 }}
+              transition={{ type: 'spring', stiffness: 350, damping: 30, mass: 0.8 }}
+              className="relative w-full max-w-sm transform-gpu rounded-[32px] border border-border bg-background p-7 shadow-2xl"
+            >
+              <div className="space-y-1.5">
+                <h3 className="text-[19px] font-bold tracking-tight text-foreground">删除供应商</h3>
+                <p className="text-[13px] leading-5 text-muted-foreground">
+                  确定删除供应商「{pendingDeleteConfig.name}」吗？此操作不可撤销。
+                </p>
+              </div>
+              <div className="flex gap-3 pt-7">
+                <button
+                  onClick={() => setPendingDeleteConfig(null)}
+                  className="flex-1 rounded-[24px] border border-border py-3 text-[13px] font-bold text-foreground transition-all hover:bg-muted/50 active:scale-[0.98]"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleConfirmDelete}
+                  className="flex-1 rounded-[24px] bg-[#d65a54] py-3 text-[13px] font-bold text-white transition-all hover:bg-[#d65a54]/90 active:scale-[0.98]"
+                >
+                  删除
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        ) : null}
+      </AnimatePresence>
     </>
   );
 }
@@ -441,7 +494,6 @@ export function ProviderConfigModal({
     baseUrl: '',
     apiKey: '',
     models: [{ id: '', name: '', enabled: true, supportsMultimodal: false }],
-    inputContextWindow: 0,
     outputContextWindow: 2048,
   };
 
@@ -456,7 +508,6 @@ export function ProviderConfigModal({
         models: config.models.length > 0
           ? config.models.map((model) => ({ ...model, supportsMultimodal: model.supportsMultimodal ?? false }))
           : [{ id: '', name: '', enabled: true, supportsMultimodal: false }],
-        inputContextWindow: config.inputContextWindow,
         outputContextWindow: config.outputContextWindow,
       });
     } else {
@@ -514,7 +565,6 @@ export function ProviderConfigModal({
             enabled: m.enabled,
             supportsMultimodal: m.supportsMultimodal ?? false,
           })),
-          inputContextWindow: formData.inputContextWindow,
           outputContextWindow: formData.outputContextWindow,
         });
       } else {
@@ -528,7 +578,6 @@ export function ProviderConfigModal({
             enabled: m.enabled,
             supportsMultimodal: m.supportsMultimodal ?? false,
           })),
-          inputContextWindow: formData.inputContextWindow,
           outputContextWindow: formData.outputContextWindow,
         });
       }

@@ -1,7 +1,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const { app, BrowserWindow, BrowserView, shell, ipcMain } = require('electron');
+const { app, BrowserWindow, BrowserView, shell, ipcMain, Menu } = require('electron');
 const { spawn } = require('node:child_process');
 const net = require('node:net');
 const http = require('node:http');
@@ -154,9 +154,14 @@ function getBackendExePath() {
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'venture-backend.exe');
   }
+  // Cargo workspace 将二进制放在 workspace 根的 target/ 下
   const gnuPath = path.join(__dirname, '..', 'backend', 'target', 'x86_64-pc-windows-gnu', 'debug', 'venture-backend.exe');
   const msvcPath = path.join(__dirname, '..', 'backend', 'target', 'debug', 'venture-backend.exe');
+  const workspaceGnuPath = path.join(__dirname, '..', 'target', 'x86_64-pc-windows-gnu', 'debug', 'venture-backend.exe');
+  const workspaceMsvcPath = path.join(__dirname, '..', 'target', 'debug', 'venture-backend.exe');
   if (fs.existsSync(gnuPath)) return gnuPath;
+  if (fs.existsSync(workspaceGnuPath)) return workspaceGnuPath;
+  if (fs.existsSync(workspaceMsvcPath)) return workspaceMsvcPath;
   return msvcPath;
 }
 
@@ -722,6 +727,19 @@ function createMainWindow() {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     safeOpenExternal(url);
     return { action: 'deny' };
+  });
+
+  // Electron 默认没有右键菜单：仅在点击可编辑区域（input/textarea/contentEditable，
+  // 如聊天输入框）时弹出原生编辑菜单；其余区域不弹，保持应用自有右键交互。
+  mainWindow.webContents.on('context-menu', (_event, params) => {
+    if (!params.isEditable) return;
+    Menu.buildFromTemplate([
+      { label: '剪切', role: 'cut', enabled: params.editFlags.canCut },
+      { label: '复制', role: 'copy', enabled: params.editFlags.canCopy },
+      { label: '粘贴', role: 'paste', enabled: params.editFlags.canPaste },
+      { type: 'separator' },
+      { label: '全选', role: 'selectAll', enabled: params.editFlags.canSelectAll },
+    ]).popup({ window: mainWindow });
   });
 
   mainWindow.webContents.on('will-navigate', (event, url) => {
