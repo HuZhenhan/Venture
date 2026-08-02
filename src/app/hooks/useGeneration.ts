@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback } from 'react';
 import { useChatStore } from '../store/useChatStore';
 import { useLayoutStore } from '../store/useLayoutStore';
 import {
@@ -20,10 +20,33 @@ import {
 } from '../utils/messageContentProtocol';
 import { executeTool } from '../services/toolService';
 import { usePreferencesStore } from '../store/usePreferencesStore';
+import {
+  APPROVAL_EXPIRED_OUTPUT,
+  evaluateToolCall,
+  permissionDeniedOutput,
+  resolvePermissionForChat,
+} from '../utils/toolPermissions';
 
 const DEFAULT_CHAT_TEMPERATURE = 0.8;
 /// Agent 工具循环最大迭代次数，防止模型陷入无限工具调用。
 const MAX_TOOL_ITERATIONS = 15;
+
+// ── 生成控制状态（模块级单例）──────────────────────────────────────────────
+// 生成会话状态（generatingChatId / generationSession）存于全局 store，而
+// abort 控制与工具循环控制必须同样是全局单例：useGeneration 会被 ChatInput
+// （useChatComposer）与 MessageList（useMessageListActions）分别实例化。
+// 若这些 ref 留在 hook 内，ChatInput 停止按钮 abort 的是自身实例的 controller，
+// 无法中断另一实例发起的生成（如回答 ask 卡片、重新生成后的 continue）。
+// 同一时刻只有一个生成会话（generatingChatId 全局唯一），单例语义安全。
+const abortControllerRef = { current: null as AbortController | null };
+/// Agent 工具循环迭代计数。每次新一轮（非 continue）生成时重置。
+const toolLoopIterationRef = { current: 0 };
+/// 持有 triggerAIResponse 的引用，供 runToolLoop 继续生成时调用，打破循环依赖。
+const triggerRef = { current: null as ((chatId: string, modelId?: string, options?: { continueMessageId?: string }) => void) | null };
+/// 流式 tool_call delta 累积器：按 index 累积 id/name/arguments。
+const toolCallAccumulator = { current: new Map<number, { id: string; name: string; arguments: string }>() };
+/// runToolLoop 并发锁序号：每次新调用递增，用于防止旧的 runToolLoop 覆盖新状态。
+const toolLoopSeqRef = { current: 0 };
 
 interface ResolvedModelSelection {
   provider: NonNullable<ReturnType<typeof useChatStore.getState>['apiConfigs'][number]>;
@@ -186,16 +209,6 @@ export function useGeneration() {
   const closePanel = useLayoutStore((s) => s.closePanel);
   const clearActiveDiff = useLayoutStore((s) => s.clearActiveDiff);
 
-  const abortControllerRef = useRef<AbortController | null>(null);
-  /// Agent 工具循环迭代计数。每次新一轮（非 continue）生成时重置。
-  const toolLoopIterationRef = useRef(0);
-  /// 持有 triggerAIResponse 的引用，供 runToolLoop 继续生成时调用，打破循环依赖。
-  const triggerRef = useRef<((chatId: string, modelId?: string, options?: { continueMessageId?: string }) => void) | null>(null);
-  /// 流式 tool_call delta 累积器：按 index 累积 id/name/arguments。
-  const toolCallAccumulator = useRef<Map<number, { id: string; name: string; arguments: string }>>(new Map());
-  /// runToolLoop 并发锁序号：每次新调用递增，用于防止旧的 runToolLoop 覆盖新状态。
-  const toolLoopSeqRef = useRef(0);
-
   const updateMessageInChat = useCallback(
     (chatId: string, messageId: string, updater: (message: Message) => Message) => {
       updateChatMessages(chatId, (messages) => updateMessageInList(messages, messageId, updater));
@@ -213,9 +226,11 @@ export function useGeneration() {
    * 4. 全部执行完毕后，以 continue 模式重新触发 AI 响应，让模型读取工具结果继续生成。
    *
    * 迭代上限 MAX_TOOL_ITERATIONS 防止模型陷入无限工具调用。
+   *
+   * turnMessageId：当前轮次对应的 user message ID，用于文件回退系统的 turn 级关联。
    */
   const runToolLoop = useCallback(
-    async (chatId: string, messageId: string, modelId: string, isContinue: boolean) => {
+    async (chatId: string, messageId: string, modelId: string, isContinue: boolean, turnMessageId?: string) => {
       // 获取本实例的唯一序号，用于 cancelation token 模式：外部（handleStopGeneration、
       // 新一轮 triggerAIResponse）可通过递增 toolLoopSeqRef 使旧实例跳过 continue 和清理。
       const mySeq = ++toolLoopSeqRef.current;
@@ -281,6 +296,53 @@ export function useGeneration() {
       // 执行普通 pending 工具
       toolLoopIterationRef.current += 1;
       for (const tool of normalTools) {
+        // 停止（handleStopGeneration）或新一轮生成会递增 seq，中止剩余工具执行
+        if (toolLoopSeqRef.current !== mySeq) break;
+
+        // ── 权限系统：执行前判定 allow / deny / ask ──────────────────────
+        // approvalGranted：用户刚在询问卡片上点击"同意/一律同意"，本次直接放行。
+        const latestChat = useChatStore.getState().chats.find((c) => c.id === chatId);
+        const currentMode = latestChat?.mode ?? 'agent';
+        const permissionLevel = resolvePermissionForChat(latestChat, currentMode);
+        const decision: 'allow' | 'deny' | 'ask' = tool.approvalGranted
+          ? 'allow'
+          : evaluateToolCall({
+              level: permissionLevel,
+              mode: currentMode,
+              toolName: tool.name,
+              input: tool.input,
+              approvedSignatures: latestChat?.approvedToolCalls ?? [],
+            });
+
+        if (decision === 'deny') {
+          // 权限不足（只读 / yolo 下仅一般操作）：自动拒绝，结果回填给模型
+          updatedTools = updatedTools.map((t) =>
+            t.id === tool.id
+              ? { ...t, status: 'failed' as ToolCallStatus, output: permissionDeniedOutput(permissionLevel, tool.name) }
+              : t
+          );
+          updateMessageInChat(chatId, messageId, (msg) => ({
+            ...msg,
+            toolCalls: updatedTools,
+          }));
+          continue;
+        }
+
+        if (decision === 'ask') {
+          // 需要用户授权：标记 needs_approval 并暂停工具循环，等待询问卡片结果。
+          // 状态随会话持久化，即使关闭软件，重新打开后卡片仍会正常显示。
+          updatedTools = updatedTools.map((t) =>
+            t.id === tool.id ? { ...t, status: 'needs_approval' as ToolCallStatus } : t
+          );
+          updateMessageInChat(chatId, messageId, (msg) => ({
+            ...msg,
+            toolCalls: updatedTools,
+          }));
+          setGeneratingChatId(null);
+          setGenerationSession(null);
+          return;
+        }
+
         updatedTools = updatedTools.map((t) =>
           t.id === tool.id ? { ...t, status: 'running' as ToolCallStatus } : t
         );
@@ -294,6 +356,7 @@ export function useGeneration() {
             tool: tool.name,
             input: tool.input,
             chatId,
+            turnMessageId,
           });
           const status: ToolCallStatus = result.isError ? 'failed' : 'completed';
           updatedTools = updatedTools.map((t) =>
@@ -331,6 +394,52 @@ export function useGeneration() {
       }
     },
     [setGeneratingChatId, setGenerationSession, updateMessageInChat]
+  );
+
+  /**
+   * 权限询问（或 AskUserQuestion）得到用户答复后，恢复工具执行流程。
+   *
+   * - 仍有 pending 工具 → 重新进入 runToolLoop 继续执行；
+   * - 无 pending 且无任何未解决的等待状态 → 以 continue 模式重新触发生成，
+   *   让模型读取工具结果（含被拒绝的结果）继续输出；
+   * - 仍有其它等待中的卡片 → 保持暂停，不做任何事。
+   *
+   * 该路径同样覆盖「软件重启后答复遗留询问卡片」的场景：状态均已持久化，
+   * 此处只需按当前 store 中的消息状态推进即可。
+   */
+  const resumeToolExecution = useCallback(
+    (chatId: string, messageId: string) => {
+      const chat = useChatStore.getState().chats.find((c) => c.id === chatId);
+      const message = chat?.messages.find((m) => m.id === messageId);
+      if (!chat || !message) return;
+
+      const tools = message.toolCalls ?? [];
+      const hasPending = tools.some((t) => t.status === 'pending');
+      const hasUnresolved = tools.some(
+        (t) => t.status === 'needs_user_input' || t.status === 'needs_approval',
+      );
+
+      if (hasPending) {
+        // modelId 在 continue 路径仅用于标题生成（且 isContinue=true 时不会生成），
+        // 因此即使模型配置尚未加载完成也不阻塞工具恢复执行。
+        const selection = resolveEnabledModelSelection(useChatStore.getState().apiConfigs);
+        // 计算当前 turn 对应的 user message ID（与 triggerAIResponse 中的逻辑一致）
+        let turnMessageId: string | undefined;
+        for (let i = chat.messages.length - 1; i >= 0; i -= 1) {
+          if (chat.messages[i].role === 'user') {
+            turnMessageId = chat.messages[i].id;
+            break;
+          }
+        }
+        void runToolLoop(chatId, messageId, selection?.model.id ?? '', true, turnMessageId);
+        return;
+      }
+
+      if (!hasUnresolved) {
+        triggerRef.current?.(chatId, undefined, { continueMessageId: messageId });
+      }
+    },
+    [runToolLoop]
   );
 
   const triggerAIResponse = useCallback(
@@ -381,6 +490,45 @@ export function useGeneration() {
         setGeneratingChatId(null);
         setGenerationSession(null);
         return;
+      }
+
+      // 新一轮生成前，自动放弃历史轮次中尚未回答的 AskUserQuestion（视为跳过），
+      // 避免 needs_user_input 状态永久残留（该状态下消息操作栏会被隐藏）。
+      // 同理，未处理的权限询问（needs_approval）也标记为失败取消，防止悬挂。
+      const hasStaleAsks = chat.messages.some((m) =>
+        (m.toolCalls ?? []).some(
+          (tc) =>
+            (tc.name === 'AskUserQuestion' && tc.status === 'needs_user_input') ||
+            tc.status === 'needs_approval',
+        ),
+      );
+      if (hasStaleAsks) {
+        updateChatMessages(chatId, (messages) =>
+          messages.map((m) => ({
+            ...m,
+            toolCalls: (m.toolCalls ?? []).map((tc) => {
+              if (tc.name === 'AskUserQuestion' && tc.status === 'needs_user_input') {
+                return { ...tc, status: 'completed' as const, output: '[skipped]' };
+              }
+              if (tc.status === 'needs_approval') {
+                return { ...tc, status: 'failed' as const, output: APPROVAL_EXPIRED_OUTPUT };
+              }
+              return tc;
+            }),
+          })),
+        );
+      }
+
+      // 计算当前 turn 对应的 user message ID，用于文件回退系统的 turn 级关联。
+      // 逆序查找 AI 消息之前的最后一条 user 消息。
+      let turnMessageId: string | undefined;
+      for (let i = chat.messages.length - 1; i >= 0; i -= 1) {
+        const msg = chat.messages[i];
+        if (msg.id === aiMessageId && !isContinue) continue;
+        if (msg.role === 'user') {
+          turnMessageId = msg.id;
+          break;
+        }
       }
 
       const modelSelection = resolveEnabledModelSelection(apiConfigs, modelId);
@@ -562,7 +710,7 @@ export function useGeneration() {
               });
               finishTraceRecord();
               // Agent 工具循环：检测 pending 工具调用 → 执行 → 继续生成。
-              void runToolLoop(chatId, aiMessageId, resolvedModelId, isContinue);
+              void runToolLoop(chatId, aiMessageId, resolvedModelId, isContinue, turnMessageId);
             } else if (event.event === 'error') {
               finishTraceRecord();
               const errorContent = formatErrorContent(event.data.code, event.data.message);
@@ -665,6 +813,7 @@ export function useGeneration() {
 
   return {
     triggerAIResponse,
+    resumeToolExecution,
     handleConfirmFileOp,
     handleRejectFileOp,
     handleStopGeneration,

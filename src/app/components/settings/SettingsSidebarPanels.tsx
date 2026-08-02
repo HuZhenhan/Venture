@@ -54,7 +54,6 @@ interface ProviderFormData {
   apiKey: string;
   models: AIModel[];
   inputContextWindow: number;
-  outputContextWindow: number;
 }
 
 interface ProviderConfigModalProps {
@@ -270,6 +269,7 @@ export function ProviderLibraryPanel({
 }: ProviderLibraryPanelProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingConfig, setEditingConfig] = useState<APIConfig | null>(null);
+  const [pendingDeleteConfig, setPendingDeleteConfig] = useState<APIConfig | null>(null);
   const { loadApiConfigs, setApiConfigs } = useChatStore();
 
   const handleOpenAddModal = () => {
@@ -289,6 +289,13 @@ export function ProviderLibraryPanel({
     } catch {
       setApiConfigs((prev) => prev.filter((c) => c.id !== id));
     }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!pendingDeleteConfig) return;
+    const id = pendingDeleteConfig.id;
+    setPendingDeleteConfig(null);
+    await handleDeleteConfig(id);
   };
 
   const handleToggleModel = async (configId: string, modelId: string) => {
@@ -355,13 +362,16 @@ export function ProviderLibraryPanel({
                       <div className="flex shrink-0 items-center gap-0.5">
                         <button
                           onClick={() => handleOpenEditModal(config)}
-                          className="rounded-lg p-1.5 text-muted-foreground opacity-0 transition-all hover:bg-muted/50 hover:text-foreground group-hover:opacity-100"
+                          className="rounded-lg p-1.5 text-muted-foreground transition-all hover:bg-muted/50 hover:text-foreground"
                         >
                           <Edit2 size={14} />
                         </button>
                         <button
-                          onClick={() => handleDeleteConfig(config.id)}
-                          className="rounded-lg p-1.5 text-muted-foreground opacity-0 transition-all hover:bg-destructive/10 hover:text-destructive group-hover:opacity-100"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPendingDeleteConfig(config);
+                          }}
+                          className="rounded-lg p-1.5 text-muted-foreground transition-all hover:bg-destructive/10 hover:text-destructive"
                         >
                           <Trash2 size={14} />
                         </button>
@@ -423,6 +433,49 @@ export function ProviderLibraryPanel({
         editingConfig={editingConfig}
         onClose={() => setIsModalOpen(false)}
       />
+
+      {/* 删除供应商确认弹窗 */}
+      <AnimatePresence>
+        {pendingDeleteConfig ? (
+          <div className="fixed inset-0 z-[999] flex items-center justify-center p-6">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setPendingDeleteConfig(null)}
+              className="absolute inset-0 bg-black/40 backdrop-blur-md"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 30 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 30 }}
+              transition={{ type: 'spring', stiffness: 350, damping: 30, mass: 0.8 }}
+              className="relative w-full max-w-sm transform-gpu rounded-[32px] border border-border bg-background p-7 shadow-2xl"
+            >
+              <div className="space-y-1.5">
+                <h3 className="text-[19px] font-bold tracking-tight text-foreground">删除供应商</h3>
+                <p className="text-[13px] leading-5 text-muted-foreground">
+                  确定删除供应商「{pendingDeleteConfig.name}」吗？此操作不可撤销。
+                </p>
+              </div>
+              <div className="flex gap-3 pt-7">
+                <button
+                  onClick={() => setPendingDeleteConfig(null)}
+                  className="flex-1 rounded-[24px] border border-border py-3 text-[13px] font-bold text-foreground transition-all hover:bg-muted/50 active:scale-[0.98]"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={handleConfirmDelete}
+                  className="flex-1 rounded-[24px] bg-[#d65a54] py-3 text-[13px] font-bold text-white transition-all hover:bg-[#d65a54]/90 active:scale-[0.98]"
+                >
+                  删除
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        ) : null}
+      </AnimatePresence>
     </>
   );
 }
@@ -441,8 +494,7 @@ export function ProviderConfigModal({
     baseUrl: '',
     apiKey: '',
     models: [{ id: '', name: '', enabled: true, supportsMultimodal: false }],
-    inputContextWindow: 0,
-    outputContextWindow: 2048,
+    inputContextWindow: 128,
   };
 
   const [formData, setFormData] = useState<ProviderFormData>(emptyForm);
@@ -457,7 +509,6 @@ export function ProviderConfigModal({
           ? config.models.map((model) => ({ ...model, supportsMultimodal: model.supportsMultimodal ?? false }))
           : [{ id: '', name: '', enabled: true, supportsMultimodal: false }],
         inputContextWindow: config.inputContextWindow,
-        outputContextWindow: config.outputContextWindow,
       });
     } else {
       setFormData(emptyForm);
@@ -515,7 +566,6 @@ export function ProviderConfigModal({
             supportsMultimodal: m.supportsMultimodal ?? false,
           })),
           inputContextWindow: formData.inputContextWindow,
-          outputContextWindow: formData.outputContextWindow,
         });
       } else {
         await addProvider({
@@ -529,7 +579,6 @@ export function ProviderConfigModal({
             supportsMultimodal: m.supportsMultimodal ?? false,
           })),
           inputContextWindow: formData.inputContextWindow,
-          outputContextWindow: formData.outputContextWindow,
         });
       }
       await loadApiConfigs();
@@ -668,13 +717,13 @@ export function ProviderConfigModal({
               <div className="space-y-3">
                 <label className="ml-1 text-[11px] font-bold uppercase tracking-widest text-muted-foreground">上下文配置</label>
                 <div className="space-y-1.5">
-                    <span className="ml-1 text-[11px] text-muted-foreground">输出上下文（max tokens）</span>
+                    <span className="ml-1 text-[11px] text-muted-foreground">输入上下文（K tokens）</span>
                     <input
                       type="number"
-                      min={256}
-                      max={131072}
-                      value={formData.outputContextWindow}
-                      onChange={(e) => setFormData((p) => ({ ...p, outputContextWindow: parseInt(e.target.value) || 2048 }))}
+                      min={1}
+                      max={200}
+                      value={formData.inputContextWindow || ''}
+                      onChange={(e) => setFormData((p) => ({ ...p, inputContextWindow: parseInt(e.target.value) || 0 }))}
                       className="w-full rounded-[20px] border-none bg-input-background px-4 py-3 text-[15px] font-medium outline-none transition-all focus:ring-4 focus:ring-primary/5"
                     />
                   </div>

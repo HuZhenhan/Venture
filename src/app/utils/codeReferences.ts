@@ -95,7 +95,8 @@ function serializeResourceReference(reference: ResourceComposerReference) {
     return segments.join("\n");
   }
 
-  const segments = [`引用${getReferenceTypeLabel(reference.kind)} ${reference.label}`];
+  const typeLabel = reference.kind === 'chat' ? '内容' : getReferenceTypeLabel(reference.kind);
+  const segments = [`用户引用了${typeLabel}：${reference.label}`];
 
   if (reference.detail && reference.detail !== reference.label) {
     segments.push(reference.detail);
@@ -123,7 +124,7 @@ export function draftNodesToText(nodes: ComposerDraftNode[], references: Compose
   return nodes.map((node) => {
     if (node.type === "text") return node.text;
     const reference = referenceMap.get(node.referenceId);
-    return reference ? `【资源: ${reference.label}】` : "";
+    return reference ? `【用户引用了${reference.kind === 'chat' ? '内容' : getReferenceTypeLabel(reference.kind)}：${reference.label}】` : "";
   }).join("").trim();
 }
 

@@ -20,6 +20,7 @@ import { parseDebugCommand } from "../../utils/debugCommands";
 import { startClickLogging, stopClickLogging } from "../../utils/debugClickLogger";
 import { ComposerReferenceMenu } from "./ComposerReferenceMenu";
 import { ComposerReferencePill } from "./cards/ComposerReferencePill";
+import { PermissionSelector } from "./PermissionSelector";
 import { RichComposerEditor } from "./RichComposerEditor";
 import { ACCEPTED_ATTACHMENT_TYPES } from "../../utils/uploadedResources";
 
@@ -193,6 +194,11 @@ export function ChatInput({ inputAreaRef, onMessageSent }: ChatInputProps = {}) 
                   if (e.target instanceof HTMLElement && e.target.closest('[data-composer-action="true"]')) {
                     return;
                   }
+                  // 编辑器区域（contentEditable）：不 preventDefault，
+                  // 保留浏览器默认行为（点击定位光标、选中文本、右键菜单）
+                  if (e.target instanceof HTMLElement && e.target.closest('[data-composer-editor="true"]')) {
+                    return;
+                  }
                   preserveComposerFocus(e);
                 }}
                 className={`relative flex flex-col gap-1.5 px-4 py-2.5 sm:px-5 sm:py-2.5 min-h-[56px] rounded-[24px] border border-border bg-input-background shadow-lg transition-all duration-500 ${
@@ -328,6 +334,7 @@ export function ChatInput({ inputAreaRef, onMessageSent }: ChatInputProps = {}) 
                       </button>
                     )}
                   </div>
+                  <PermissionSelector preserveComposerFocus={preserveComposerFocus} />
                   <button type={isGenerating ? "button" : "button"} data-composer-action="true" onMouseDown={preserveComposerFocus} onClick={isGenerating ? handleStopGeneration : handleEditorSubmit} disabled={((!draftMessage.trim() && draftReferences.length === 0) || availableModels.length === 0) && !isGenerating} className={`relative flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-xl transition-all duration-300 active:scale-90 ${((draftMessage.trim() || draftReferences.length > 0) && availableModels.length > 0) || isGenerating ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground cursor-not-allowed opacity-40"}`} title={availableModels.length === 0 ? "未启用任何模型" : undefined}>
                     <AnimatePresence mode="wait">
                       {isGenerating ? (

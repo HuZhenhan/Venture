@@ -2,6 +2,7 @@ pub mod app_data;
 pub mod config;
 pub mod crypto;
 pub mod error;
+pub mod file_history;
 pub mod provider;
 pub mod chat;
 pub mod task_store;
@@ -37,6 +38,7 @@ pub(crate) struct AppState {
     pub(crate) http: Arc<Client>,
     pub(crate) task_store: Arc<TaskStore>,
     pub(crate) read_tracker: Arc<tools::ReadTracker>,
+    pub(crate) file_history: Arc<file_history::FileHistory>,
     startup_nonce: String,
 }
 
@@ -49,16 +51,10 @@ struct AddProviderRequest {
     models: Vec<ModelEntry>,
     #[serde(default = "default_input_context_window")]
     input_context_window: u32,
-    #[serde(default = "default_output_context_window")]
-    output_context_window: u32,
 }
 
 fn default_input_context_window() -> u32 {
     20
-}
-
-fn default_output_context_window() -> u32 {
-    4096
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,7 +65,6 @@ struct UpdateProviderRequest {
     api_key: Option<String>,
     models: Option<Vec<ModelEntry>>,
     input_context_window: Option<u32>,
-    output_context_window: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -98,6 +93,10 @@ struct ExecuteToolRequest {
     /// 任务工具按 chatId 隔离；文件系统工具可忽略。
     #[serde(default)]
     chat_id: String,
+    /// 当前对话轮次的消息 ID（用于文件回退系统的 turn 级关联）。
+    /// 提供时触发备份流程，不提供时跳过备份（向后兼容）。
+    #[serde(default)]
+    turn_message_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -186,7 +185,6 @@ async fn add_provider(
         body.api_key,
         body.models,
         body.input_context_window,
-        body.output_context_window,
     ).await?;
     Ok(Json(json!({ "provider": p })))
 }
@@ -203,7 +201,6 @@ async fn update_provider(
         body.api_key,
         body.models,
         body.input_context_window,
-        body.output_context_window,
     ).await?;
     Ok(Json(json!({ "provider": p })))
 }
@@ -246,6 +243,8 @@ async fn execute_tool_handler(
         s.task_store.as_ref(),
         ws.as_deref(),
         s.read_tracker.as_ref(),
+        s.file_history.as_ref(),
+        body.turn_message_id.as_deref(),
     )
     .await?;
     Ok(Json(result))
@@ -301,6 +300,199 @@ fn generate_nonce() -> String {
     buf.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
+// ─── 文件回退系统 API 路由处理器 ──────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RestoreTurnRequest {
+    chat_id: String,
+    turn_id: String,
+}
+
+async fn restore_turn_handler(
+    State(s): State<AppState>,
+    Json(body): Json<RestoreTurnRequest>,
+) -> Result<Json<Value>, AppError> {
+    let turn_id = file_history::TurnId(body.turn_id);
+    let result = file_history::rollback::revert_turn(&turn_id, s.file_history.as_ref()).await?;
+    Ok(Json(serde_json::to_value(&result).unwrap_or_default()))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RestoreRecordsRequest {
+    record_ids: Vec<String>,
+}
+
+async fn restore_records_handler(
+    State(s): State<AppState>,
+    Json(body): Json<RestoreRecordsRequest>,
+) -> Result<Json<Value>, AppError> {
+    let ids: Vec<file_history::RecordId> = body.record_ids.into_iter().map(file_history::RecordId).collect();
+    let result = file_history::rollback::revert_records(&ids, s.file_history.as_ref()).await?;
+    Ok(Json(serde_json::to_value(&result).unwrap_or_default()))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChangesQuery {
+    #[serde(default)]
+    chat_id: Option<String>,
+    #[serde(default)]
+    turn_id: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
+}
+
+async fn get_changes_handler(
+    State(s): State<AppState>,
+    Query(q): Query<ChangesQuery>,
+) -> Result<Json<Value>, AppError> {
+    let journal = &s.file_history.journal;
+    let mut records: Vec<file_history::ChangeRecord> = Vec::new();
+
+    if let Some(turn_id) = &q.turn_id {
+        records = journal.get_records_by_turn(&file_history::TurnId(turn_id.clone())).await?;
+    } else if let Some(path) = &q.path {
+        records = journal.get_records_for_path(path).await?;
+    }
+
+    // 转换为前端友好的 summary 格式
+    let summaries: Vec<Value> = records.iter().map(|r| {
+        serde_json::to_value(r).unwrap_or_default()
+    }).collect();
+
+    Ok(Json(json!({ "changes": summaries })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetBackupModeRequest {
+    mode: String,
+    #[serde(default)]
+    path_pattern: Option<String>,
+}
+
+async fn set_backup_mode_handler(
+    State(s): State<AppState>,
+    Json(body): Json<SetBackupModeRequest>,
+) -> Result<Json<Value>, AppError> {
+    let mode = match body.mode.as_str() {
+        "snapshot" => file_history::BackupMode::Snapshot,
+        "hunks" => file_history::BackupMode::Hunks,
+        "auto" => file_history::BackupMode::Auto,
+        other => return Err(AppError::ToolExecutionError(format!("未知的备份模式：{other}"))),
+    };
+
+    let mut config = s.file_history.config().await;
+    if let Some(pattern) = body.path_pattern {
+        config.path_overrides.push(file_history::PathOverride {
+            glob_pattern: pattern,
+            mode,
+        });
+    } else {
+        config.backup_mode = mode;
+    }
+    s.file_history.set_config(config).await;
+
+    Ok(Json(json!({ "success": true })))
+}
+
+async fn get_backup_status_handler(
+    State(s): State<AppState>,
+) -> Result<Json<Value>, AppError> {
+    let config = s.file_history.config().await;
+    let total_size = s.file_history.object_store.total_size().await?;
+    let sessions = s.file_history.journal.list_sessions_sorted_by_access().await?;
+
+    Ok(Json(json!({
+        "mode": config.backup_mode,
+        "pathOverrides": config.path_overrides,
+        "quota": {
+            "maxTotalSize": config.quota.max_total_size,
+            "safMaxTotalSize": config.quota.saf_max_total_size,
+            "warnThreshold": config.quota.warn_threshold,
+        },
+        "totalSize": total_size,
+        "sessionCount": sessions.len(),
+    })))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DeleteBackupsRequest {
+    #[serde(default)]
+    chat_id: Option<String>,
+    #[serde(default)]
+    older_than: Option<u64>,
+}
+
+async fn delete_backups_handler(
+    State(s): State<AppState>,
+    Query(q): Query<DeleteBackupsRequest>,
+) -> Result<Json<Value>, AppError> {
+    // Phase 1 简化实现：按 chat_id / session 删除
+    if let Some(chat_id) = &q.chat_id {
+        s.file_history.journal.delete_session(chat_id).await?;
+        s.file_history.object_store.delete_session_objects(chat_id).await?;
+    }
+    Ok(Json(json!({ "success": true })))
+}
+
+async fn sync_in_handler(
+    State(s): State<AppState>,
+) -> Result<Json<Value>, AppError> {
+    let saf_guard = s.file_history.saf_proxy.lock().await;
+    if let Some(proxy) = saf_guard.as_ref() {
+        let report = proxy.sync_in_from_saf(s.file_history.as_ref()).await?;
+        Ok(Json(serde_json::to_value(&report).unwrap_or_default()))
+    } else {
+        Ok(Json(json!({ "externalEdits": [], "externalDeletes": [] })))
+    }
+}
+
+async fn sync_out_handler(
+    State(s): State<AppState>,
+) -> Result<Json<Value>, AppError> {
+    let saf_guard = s.file_history.saf_proxy.lock().await;
+    if let Some(proxy) = saf_guard.as_ref() {
+        let report = proxy.sync_out_to_saf(s.file_history.as_ref()).await?;
+        Ok(Json(serde_json::to_value(&report).unwrap_or_default()))
+    } else {
+        Ok(Json(json!({ "synced": [], "failures": [] })))
+    }
+}
+
+async fn sync_status_handler(
+    State(s): State<AppState>,
+) -> Result<Json<Value>, AppError> {
+    let saf_guard = s.file_history.saf_proxy.lock().await;
+    if let Some(proxy) = saf_guard.as_ref() {
+        let dirty = proxy.dirty_files().await;
+        let tracked = proxy.tracked_files_list().await;
+        Ok(Json(json!({
+            "enabled": proxy.is_enabled(),
+            "dirtyCount": dirty.len(),
+            "dirtyFiles": dirty,
+            "trackedCount": tracked.len(),
+        })))
+    } else {
+        Ok(Json(json!({
+            "enabled": false,
+            "dirtyCount": 0,
+            "dirtyFiles": [],
+            "trackedCount": 0,
+        })))
+    }
+}
+
+async fn run_gc_handler(
+    State(s): State<AppState>,
+) -> Result<Json<Value>, AppError> {
+    let report = file_history::gc::run_gc(s.file_history.as_ref()).await?;
+    Ok(Json(serde_json::to_value(&report).unwrap_or_default()))
+}
+
 /// 启动 venture-backend HTTP 服务。
 ///
 /// `data_dir` — 可选的数据目录覆盖。当 `None` 时使用默认路径
@@ -319,10 +511,22 @@ pub async fn run_server(data_dir: Option<PathBuf>) -> anyhow::Result<()> {
     let tasks_dir = config::app_data_dir(data_dir.as_ref())
         .unwrap_or_else(|_| PathBuf::from("."))
         .join("tasks");
+    let file_history_dir = config::app_data_dir(data_dir.as_ref())
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(".mytool");
     let store = Arc::new(ConfigStore::load(data_dir.clone()).await?);
     let app_data = Arc::new(AppDataStore::load(data_dir).await?);
     let task_store = Arc::new(TaskStore::new(tasks_dir));
     let read_tracker = Arc::new(tools::ReadTracker::new());
+    let file_history = Arc::new(
+        file_history::FileHistory::new(file_history_dir).await?
+    );
+
+    // 启动时执行 WAL 崩溃恢复
+    if let Err(e) = file_history.recover_from_wal().await {
+        tracing::warn!("WAL 恢复失败（非致命，继续启动）：{e}");
+    }
+
     let http = Arc::new(
         Client::builder()
             .connect_timeout(std::time::Duration::from_secs(15))
@@ -331,7 +535,7 @@ pub async fn run_server(data_dir: Option<PathBuf>) -> anyhow::Result<()> {
     );
 
     let startup_nonce = generate_nonce();
-    let state = AppState { store, app_data, http, task_store, read_tracker, startup_nonce };
+    let state = AppState { store, app_data, http, task_store, read_tracker, file_history, startup_nonce };
 
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(
@@ -377,6 +581,17 @@ pub async fn run_server(data_dir: Option<PathBuf>) -> anyhow::Result<()> {
         // 任务管理：CRUD，按 chatId 隔离
         .route("/api/tasks", get(list_tasks).post(create_task))
         .route("/api/tasks/:id", get(get_task_handler).patch(update_task_full))
+        // 文件回退系统：Turn 级回退 / 选择性回退 / 变更查询 / 模式管理 / SAF 同步
+        .route("/api/files/restore-turn", post(restore_turn_handler))
+        .route("/api/files/restore-records", post(restore_records_handler))
+        .route("/api/files/changes", get(get_changes_handler))
+        .route("/api/files/backup-mode", post(set_backup_mode_handler))
+        .route("/api/files/backup-status", get(get_backup_status_handler))
+        .route("/api/files/backups", axum::routing::delete(delete_backups_handler))
+        .route("/api/files/sync-in", post(sync_in_handler))
+        .route("/api/files/sync-out", post(sync_out_handler))
+        .route("/api/files/sync-status", get(sync_status_handler))
+        .route("/api/files/gc", post(run_gc_handler))
         .layer(DefaultBodyLimit::max(REQUEST_BODY_LIMIT))
         .layer(cors)
         .with_state(state);

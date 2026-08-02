@@ -15,7 +15,6 @@ export interface AddProviderParams {
   apiKey: string;
   models: AIModel[];
   inputContextWindow: number;
-  outputContextWindow: number;
 }
 
 export interface UpdateProviderParams {
@@ -24,7 +23,6 @@ export interface UpdateProviderParams {
   apiKey?: string;
   models?: AIModel[];
   inputContextWindow?: number;
-  outputContextWindow?: number;
 }
 
 export async function listProviders(): Promise<APIConfig[]> {

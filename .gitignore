@@ -34,3 +34,6 @@ backend/target/
 
 # Temp
 *.tmp
+
+# WorkBuddy tool private data
+.workbuddy/

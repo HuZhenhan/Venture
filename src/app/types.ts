@@ -5,6 +5,20 @@ export type ChatSubmitAction =
 
 export type ChatMode = 'agent' | 'plan' | 'yolo';
 
+/**
+ * 工具调用权限级别：
+ * - unrestricted：无限制，所有工具直接执行；
+ * - auto_review：自动审查（接口预留，暂未启用，行为同无限制）；
+ * - readonly：只读，仅允许 Read/Glob/Grep/AskUserQuestion/Task 系列；
+ * - general：仅一般操作，自动放行 Read/Write/Edit/Glob/Grep/AskUserQuestion/Task 系列，
+ *   其余工具需用户同意（yolo 模式下权限外工具直接自动拒绝）；
+ * - ask_all：全部询问，所有工具调用都需用户同意。
+ */
+export type ToolPermissionLevel = 'unrestricted' | 'auto_review' | 'readonly' | 'general' | 'ask_all';
+
+/** 各模式下可选择的权限级别。 */
+export type ToolPermissionsByMode = Partial<Record<ChatMode, ToolPermissionLevel>>;
+
 export interface Task {
   id: string;
   title: string;
@@ -69,7 +83,7 @@ export interface AskForm {
   };
 }
 
-export type ToolCallStatus = 'pending' | 'running' | 'completed' | 'failed' | 'needs_user_input';
+export type ToolCallStatus = 'pending' | 'running' | 'completed' | 'failed' | 'needs_user_input' | 'needs_approval';
 
 export interface ToolCall {
   id: string;
@@ -81,6 +95,10 @@ export interface ToolCall {
   output?: string;
   /** 后端返回的结构化数据（如任务对象），可选。 */
   structured?: unknown;
+  /** 操作描述（权限询问卡片展示用，预留字段，暂未启用）。 */
+  description?: string;
+  /** 用户已在权限询问中同意本次调用（一次性放行标记，"一律同意"另行写入会话白名单）。 */
+  approvalGranted?: boolean;
 }
 
 export interface SearchOp {
@@ -258,6 +276,10 @@ export interface Chat {
   title: string;
   messages: Message[];
   mode: ChatMode;
+  /** 各模式下用户选择的工具权限级别（随会话持久化）。 */
+  permissions?: ToolPermissionsByMode;
+  /** "一律同意"白名单：工具签名（工具名 + 规范化参数），命中的调用自动同意。 */
+  approvedToolCalls?: string[];
 }
 
 export interface AIModel {
@@ -275,5 +297,4 @@ export interface APIConfig {
   apiKeyPreview: string;
   models: AIModel[];
   inputContextWindow: number;
-  outputContextWindow: number;
 }

@@ -154,9 +154,14 @@ function getBackendExePath() {
   if (app.isPackaged) {
     return path.join(process.resourcesPath, 'venture-backend.exe');
   }
+  // Cargo workspace 将二进制放在 workspace 根的 target/ 下，而非 backend/target/
   const gnuPath = path.join(__dirname, '..', 'backend', 'target', 'x86_64-pc-windows-gnu', 'debug', 'venture-backend.exe');
   const msvcPath = path.join(__dirname, '..', 'backend', 'target', 'debug', 'venture-backend.exe');
+  const workspaceGnuPath = path.join(__dirname, '..', 'target', 'x86_64-pc-windows-gnu', 'debug', 'venture-backend.exe');
+  const workspaceMsvcPath = path.join(__dirname, '..', 'target', 'debug', 'venture-backend.exe');
   if (fs.existsSync(gnuPath)) return gnuPath;
+  if (fs.existsSync(workspaceGnuPath)) return workspaceGnuPath;
+  if (fs.existsSync(workspaceMsvcPath)) return workspaceMsvcPath;
   return msvcPath;
 }
 
@@ -260,9 +265,11 @@ function startBackend() {
   if (!fs.existsSync(exePath)) {
     console.error(`[backend] FATAL — exe not found at: ${exePath}`);
     console.error('[backend] searched paths:');
-    console.error(`  (packaged) ${path.join(process.resourcesPath ?? '', 'venture-backend.exe')}`);
-    console.error(`  (gnu)      ${path.join(__dirname, '..', 'backend', 'target', 'x86_64-pc-windows-gnu', 'debug', 'venture-backend.exe')}`);
-    console.error(`  (msvc)     ${path.join(__dirname, '..', 'backend', 'target', 'debug', 'venture-backend.exe')}`);
+    console.error(`  (packaged)  ${path.join(process.resourcesPath ?? '', 'venture-backend.exe')}`);
+    console.error(`  (gnu)       ${path.join(__dirname, '..', 'backend', 'target', 'x86_64-pc-windows-gnu', 'debug', 'venture-backend.exe')}`);
+    console.error(`  (msvc)      ${path.join(__dirname, '..', 'backend', 'target', 'debug', 'venture-backend.exe')}`);
+    console.error(`  (ws-gnu)    ${path.join(__dirname, '..', 'target', 'x86_64-pc-windows-gnu', 'debug', 'venture-backend.exe')}`);
+    console.error(`  (ws-msvc)   ${path.join(__dirname, '..', 'target', 'debug', 'venture-backend.exe')}`);
     return;
   }
 

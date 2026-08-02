@@ -1,6 +1,7 @@
 import React, { forwardRef, useCallback, useEffect, useImperativeHandle, useRef } from "react";
 import { ComposerDraftNode, ComposerReference } from "../../types";
 import { isUploadedResourceReference } from "../../utils/uploadedResources";
+import { getReferenceTypeLabel } from "../../utils/codeReferences";
 import { debugLog, debugError } from "../../utils/debugLogger";
 
 export interface RichComposerEditorHandle {
@@ -21,7 +22,7 @@ interface RichComposerEditorProps {
 }
 
 function getReferenceText(reference: ComposerReference) {
-  return `【资源: ${reference.label}】`;
+  return `【用户引用了${reference.kind === 'chat' ? '内容' : getReferenceTypeLabel(reference.kind)}：${reference.label}】`;
 }
 
 function createTokenElement(reference: ComposerReference) {
@@ -255,6 +256,7 @@ export const RichComposerEditor = forwardRef<RichComposerEditorHandle, RichCompo
         ref={editorRef}
         contentEditable={!disabled}
         suppressContentEditableWarning
+        data-composer-editor="true"
         data-placeholder={placeholder}
         className="min-h-[22px] max-h-40 w-full overflow-y-auto whitespace-pre-wrap break-words bg-transparent p-0 text-left text-[15px] leading-[1.5] text-foreground outline-none empty:before:pointer-events-none empty:before:text-muted-foreground empty:before:content-[attr(data-placeholder)] custom-scrollbar-chat"
         role="textbox"

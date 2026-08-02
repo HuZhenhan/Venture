@@ -26,6 +26,7 @@ import { useChatStore } from '../../../store/useChatStore';
 import { useLayoutStore } from '../../../store/useLayoutStore';
 import { getResidualMessageBlocks } from '../../../utils/messageContentProtocol';
 import { MessageContentRenderer } from './MessageContentRenderer';
+import { MessageTextSelectionMenu } from './MessageTextSelectionMenu';
 
 export const ScrollRootCtx = createContext<React.MutableRefObject<HTMLDivElement | null>>({ current: null });
 
@@ -69,6 +70,9 @@ interface MessageItemProps {
   onRejectFileOp: (messageId: string, fileOpId: string) => void;
   onUpdateAskBlock: (messageId: string, askId: string, answer: { selectedOptions?: string[]; text?: string }) => void;
   onSkipAskBlock: (messageId: string, askId: string) => void;
+  onApproveToolCall: (messageId: string, toolId: string) => void;
+  onAlwaysApproveToolCall: (messageId: string, toolId: string) => void;
+  onRejectToolCall: (messageId: string, toolId: string) => void;
   onMarkdownComplete: (messageId: string) => void;
 }
 
@@ -115,7 +119,8 @@ function UserTextWithReferencePills({
 
   const referenceByLabel = new Map(references.map((reference) => [reference.label, reference]));
   const segments: React.ReactNode[] = [];
-  const pattern = /【资源: ([^】]+)】/g;
+  // 兼容旧格式【资源: x】与新格式【用户引用了内容：x】（冒号全角/半角）
+  const pattern = /【(?:资源|用户引用了[^】：:]*)[：:]([^】]+)】/g;
   let cursor = 0;
   let match: RegExpExecArray | null;
 
@@ -410,13 +415,15 @@ const MessageBlock = memo(function MessageBlock({
       const references = getMessageReferences(message);
       return (
         <div className="flex justify-end">
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }} className="inline-block rounded-2xl rounded-tr-sm bg-muted/80 px-5 py-3 text-left text-[16px] font-medium leading-[1.6] tracking-tight text-foreground select-text whitespace-pre-wrap break-words">
-            <UserTextWithReferencePills
-              content={block.content}
-              references={references}
-              onOpenComposerReference={onOpenComposerReference}
-            />
-          </motion.div>
+          <MessageTextSelectionMenu>
+            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }} className="inline-block rounded-2xl rounded-tr-sm bg-muted/80 px-5 py-3 text-left text-[16px] font-medium leading-[1.6] tracking-tight text-foreground select-text whitespace-pre-wrap break-words">
+              <UserTextWithReferencePills
+                content={block.content}
+                references={references}
+                onOpenComposerReference={onOpenComposerReference}
+              />
+            </motion.div>
+          </MessageTextSelectionMenu>
         </div>
       );
     }
@@ -431,9 +438,11 @@ const MessageBlock = memo(function MessageBlock({
     }
 
     return (
-      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }} className="group/msg relative select-text">
-        <MarkdownContent content={block.content} status={isLastBlock ? message.status : 'done'} onComplete={() => onMarkdownComplete(message.id)} className="ml-2" />
-      </motion.div>
+      <MessageTextSelectionMenu>
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }} className="group/msg relative select-text">
+          <MarkdownContent content={block.content} status={isLastBlock ? message.status : 'done'} onComplete={() => onMarkdownComplete(message.id)} className="ml-2" />
+        </motion.div>
+      </MessageTextSelectionMenu>
     );
   }
 
@@ -574,6 +583,9 @@ export const MessageItem = memo(function MessageItem({
   onRejectFileOp,
   onUpdateAskBlock,
   onSkipAskBlock,
+  onApproveToolCall,
+  onAlwaysApproveToolCall,
+  onRejectToolCall,
   onMarkdownComplete,
 }: MessageItemProps) {
   const [isHovered, setIsHovered] = useState(false);
@@ -610,7 +622,7 @@ export const MessageItem = memo(function MessageItem({
     message.role === 'ai' &&
     message.status === 'done' &&
     !isGenerating &&
-    !(message.toolCalls ?? []).some((tc) => tc.status === 'needs_user_input') &&
+    !(message.toolCalls ?? []).some((tc) => tc.status === 'needs_user_input' || tc.status === 'needs_approval') &&
     !message.blocks?.some(
       (block) => block.type === 'file_op' && block.fileOp.status === 'requires_confirmation'
     );
@@ -682,6 +694,9 @@ export const MessageItem = memo(function MessageItem({
                 onMarkdownComplete={onMarkdownComplete}
                 onUpdateAskBlock={onUpdateAskBlock}
                 onSkipAskBlock={onSkipAskBlock}
+                onApproveToolCall={onApproveToolCall}
+                onAlwaysApproveToolCall={onAlwaysApproveToolCall}
+                onRejectToolCall={onRejectToolCall}
                 showReasoningTitle={autoGenerateReasoningTitles}
               />
               {residualBlocks.map((block, index) => (

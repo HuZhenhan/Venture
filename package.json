@@ -11,6 +11,10 @@
     "build:android": "bash build-apk.sh",
     "build:android:win": "build-apk.cmd",
     "build:android:dev": "tauri android dev",
+    "build:android:fast": "bash build-apk.sh --skip-front",
+    "build:android:fast:win": "build-apk.cmd --skip-front",
+    "build:android:noinstall": "bash build-apk.sh --no-install",
+    "build:android:clean": "bash build-apk.sh --clean",
     "preview:web": "vite preview --host 127.0.0.1 --port 4173",
     "tauri": "tauri"
   },

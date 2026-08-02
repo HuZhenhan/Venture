@@ -31,16 +31,10 @@ pub struct ProviderRecord {
     pub models: Vec<ModelEntry>,
     #[serde(default = "default_input_context_window")]
     pub input_context_window: u32,
-    #[serde(default = "default_output_context_window")]
-    pub output_context_window: u32,
 }
 
 fn default_input_context_window() -> u32 {
     20
-}
-
-fn default_output_context_window() -> u32 {
-    4096
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,7 +47,6 @@ pub struct ProviderPublic {
     pub api_key_preview: String,
     pub models: Vec<ModelEntry>,
     pub input_context_window: u32,
-    pub output_context_window: u32,
 }
 
 impl From<&ProviderRecord> for ProviderPublic {
@@ -77,7 +70,6 @@ impl From<&ProviderRecord> for ProviderPublic {
             api_key_preview: preview,
             models: r.models.clone(),
             input_context_window: r.input_context_window,
-            output_context_window: r.output_context_window,
         }
     }
 }
@@ -214,7 +206,6 @@ fn validate_provider_input(
     base_url: &str,
     models: &[ModelEntry],
     input_context_window: u32,
-    output_context_window: u32,
 ) -> Result<(), AppError> {
     if base_url.trim().is_empty() {
         return Err(AppError::InvalidProviderConfig("base_url is required".into()));
@@ -256,11 +247,6 @@ fn validate_provider_input(
     if input_context_window == 0 || input_context_window > 200 {
         return Err(AppError::InvalidProviderConfig(
             "inputContextWindow must be in [1, 200]".into(),
-        ));
-    }
-    if output_context_window == 0 || output_context_window > 128_000 {
-        return Err(AppError::InvalidProviderConfig(
-            "outputContextWindow must be in [1, 128000]".into(),
         ));
     }
     Ok(())
@@ -372,12 +358,11 @@ impl ConfigStore {
         api_key: String,
         models: Vec<ModelEntry>,
         input_context_window: u32,
-        output_context_window: u32,
     ) -> Result<ProviderPublic, AppError> {
         if name.trim().is_empty() {
             return Err(AppError::InvalidProviderConfig("name is required".into()));
         }
-        validate_provider_input(&base_url, &models, input_context_window, output_context_window)?;
+        validate_provider_input(&base_url, &models, input_context_window)?;
         let record = ProviderRecord {
             id: Uuid::new_v4().to_string(),
             name,
@@ -385,7 +370,6 @@ impl ConfigStore {
             api_key,
             models,
             input_context_window,
-            output_context_window,
         };
         let public = ProviderPublic::from(&record);
         {
@@ -404,7 +388,6 @@ impl ConfigStore {
         api_key: Option<String>,
         models: Option<Vec<ModelEntry>>,
         input_context_window: Option<u32>,
-        output_context_window: Option<u32>,
     ) -> Result<ProviderPublic, AppError> {
         let public = {
             let mut state = self.state.write().await;
@@ -418,8 +401,7 @@ impl ConfigStore {
             let next_base_url = base_url.clone().unwrap_or_else(|| record.base_url.clone());
             let next_models = models.clone().unwrap_or_else(|| record.models.clone());
             let next_input = input_context_window.unwrap_or(record.input_context_window);
-            let next_output = output_context_window.unwrap_or(record.output_context_window);
-            validate_provider_input(&next_base_url, &next_models, next_input, next_output)?;
+            validate_provider_input(&next_base_url, &next_models, next_input)?;
 
             if let Some(n) = name {
                 if n.trim().is_empty() {
@@ -439,9 +421,6 @@ impl ConfigStore {
             }
             if let Some(w) = input_context_window {
                 record.input_context_window = w;
-            }
-            if let Some(w) = output_context_window {
-                record.output_context_window = w;
             }
             ProviderPublic::from(&*record)
         };
