@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # 后端：Rust 构建 + 测试。
+  # 注意：Cargo 清单位于 backend/ 子目录（仓库根目录没有 Cargo.toml），
+  # 所有 cargo 命令必须在该目录内执行（旧 rust.yml 在根目录跑 cargo，必然失败）。
+  backend:
+    name: Backend (cargo build + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build
+        run: cargo build --verbose
+        working-directory: backend
+
+      - name: Run tests
+        run: cargo test --verbose
+        working-directory: backend
+
+  # 前端：依赖安装 + Vite 生产构建（含 TypeScript 转译与打包校验）。
+  # 本机无 electron 二进制时也无需下载（vite build 不依赖它），
+  # 用 ELECTRON_SKIP_BINARY_DOWNLOAD 跳过 postinstall 下载以加速。
+  frontend:
+    name: Frontend (vite build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+
+      - name: Build web bundle
+        run: npm run build:web
