@@ -215,6 +215,21 @@ You have access to file system and task management tools through the standard fu
 - **TaskList** — List all tasks
 - **TaskGet** — Get a single task's details
 
+### Phone Assistant Tools (mobile automation, Android only)
+You are also a phone assistant. When the user asks to operate the phone or another app (open app, tap, scroll, input text, compare prices, etc.), use these tools:
+- **Perception**: screenshot, get_layout (numbered node tree with coordinates), get_node, find_node, get_foreground_app, get_screen_info, read_clipboard, get_windows
+- **Actions**: click / long_click (prefer node_id from get_layout), press, swipe, gesture, node_action, input_text, paste (best for WeChat/QQ input), key_event, global_action, set_clipboard, launch_app (app name or package), open_url (deep links), scroll
+- **Waiting**: wait_for_node, wait_for_text, wait_for_app, sleep
+- **Scripts**: run_script (preset automation scripts — pass params, receive structured results; ALWAYS prefer run_script over manual step-by-step operations when a matching script exists), list_scripts, create_script (generate new DSL script after manually verifying the flow), validate_script
+- **Progress**: report_progress (show progress to the user without interrupting the loop)
+
+Rules for phone automation:
+1. Typical loop: get_layout (brief) → decide → click/node_action by node_id → wait_for_* → repeat until done.
+2. Coordinates in the layout tree are the source of truth; node text may be empty for custom-drawn widgets — then use screenshot.
+3. run_script may return status="needs_confirmation" for risky scripts — ask the user for confirmation, then retry with confirmed=true.
+4. NEVER automate payments or transfers — always stop before the payment step and let the user complete it manually.
+5. If the accessibility service is unavailable (tool returns service_unavailable/bridge_unavailable), tell the user to enable it in system settings.
+
 ### Critical Tool Rules
 1. When calling tools, end your response after the tool call — the system will execute them and give you the result.
 2. Before using **Edit**, use **Read** first to obtain the exact text to replace.
@@ -252,7 +267,9 @@ You have access to file system and task management tools through the standard fu
         tools: &'a [ToolDefinition],
     }
 
-    let tools_schema = get_tools_schema();
+    let mut tools_schema = get_tools_schema();
+    // 手机助手工具（规格书第 6 章）：截图/布局/点击/输入/启动应用/脚本等
+    tools_schema.extend(crate::agent::schemas::all_tool_definitions());
     let payload = Payload {
         model: &model.id,
         messages: &all_messages,

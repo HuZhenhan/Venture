@@ -6,7 +6,8 @@ import {
   Hash,
   ChevronDown,
   Square,
-  Bug
+  Bug,
+  Paperclip
 } from "lucide-react";
 import { useChatStore } from "../../store/useChatStore";
 import { useLayoutStore } from "../../store/useLayoutStore";
@@ -49,6 +50,8 @@ export function ChatInput({ inputAreaRef, onMessageSent }: ChatInputProps = {}) 
   const setShowTestButton = useLayoutStore((state) => state.setShowTestButton);
   const setShowLayoutDebug = useLayoutStore((state) => state.setShowLayoutDebug);
   const [isReferenceMenuOpen, setIsReferenceMenuOpen] = React.useState(false);
+  const [isAddMenuOpen, setIsAddMenuOpen] = React.useState(false);
+  const addMenuRef = React.useRef<HTMLDivElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const {
     availableModels,
@@ -82,12 +85,15 @@ export function ChatInput({ inputAreaRef, onMessageSent }: ChatInputProps = {}) 
     const handleClickOutside = (event: MouseEvent) => {
       if (composerRef.current && !composerRef.current.contains(event.target as Node)) {
         setIsReferenceMenuOpen(false);
+        setIsAddMenuOpen(false);
+      } else if (addMenuRef.current && !addMenuRef.current.contains(event.target as Node)) {
+        setIsAddMenuOpen(false);
       }
     };
 
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [composerRef]);
+  }, [composerRef, addMenuRef]);
 
   const openComposerReference = React.useCallback((reference: ComposerReference) => {
     if (reference.kind !== "code" && reference.resource?.dataUrl) {
@@ -233,8 +239,8 @@ export function ChatInput({ inputAreaRef, onMessageSent }: ChatInputProps = {}) 
                   onPasteFiles={handleFilesSelected}
                   onFocus={() => setIsInputFocused(true)}
                 />
-                <div className="flex items-center justify-between gap-3 border-t border-border pt-1.5">
-                  <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-visible">
+                <div className="flex items-center justify-between gap-2 border-t border-border pt-1">
+                  <div className="flex min-w-0 flex-1 items-center gap-0.5 overflow-visible">
                     <input
                       ref={fileInputRef}
                       type="file"
@@ -248,39 +254,74 @@ export function ChatInput({ inputAreaRef, onMessageSent }: ChatInputProps = {}) 
                         event.currentTarget.value = "";
                       }}
                     />
-                    <button
-                      type="button"
-                      data-composer-action="true"
-                      onMouseDown={preserveComposerFocus}
-                      onClick={() => fileInputRef.current?.click()}
-                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl text-muted-foreground transition-all hover:bg-muted/50 hover:text-foreground active:scale-90"
-                      aria-label="上传文件"
-                    >
-                      <Plus size={16} strokeWidth={1.8} />
-                    </button>
-                    <button
-                      type="button"
-                      data-composer-action="true"
-                      onMouseDown={preserveComposerFocus}
-                      onClick={() => setIsReferenceMenuOpen((current) => !current)}
-                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition-all active:scale-90 ${
-                        isReferenceMenuOpen
-                          ? "bg-foreground text-background"
-                          : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
-                      }`}
-                      aria-label="打开引用菜单"
-                    >
-                      <Hash size={15} strokeWidth={2.1} />
-                    </button>
+                    <div className="relative shrink-0" ref={addMenuRef}>
+                      <button
+                        type="button"
+                        data-composer-action="true"
+                        onMouseDown={preserveComposerFocus}
+                        onClick={() => setIsAddMenuOpen((current) => !current)}
+                        className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition-all active:scale-90 ${
+                          isAddMenuOpen
+                            ? "bg-foreground text-background"
+                            : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                        }`}
+                        aria-label="添加附件或引用"
+                      >
+                        <Plus size={16} strokeWidth={1.8} />
+                      </button>
+                      <AnimatePresence>
+                        {isAddMenuOpen && (
+                          <motion.div
+                            initial={{ opacity: 0, y: 8, scale: 0.96 }}
+                            animate={{ opacity: 1, y: 0, scale: 1 }}
+                            exit={{ opacity: 0, y: 6, scale: 0.96 }}
+                            transition={{ duration: 0.18, ease: [0.16, 1, 0.3, 1] }}
+                            className="absolute bottom-full left-0 mb-2 w-44 origin-bottom-left overflow-hidden rounded-2xl border border-border bg-background p-1.5 shadow-lg z-[101]"
+                            onMouseDown={(e) => e.stopPropagation()}
+                          >
+                            <button
+                              type="button"
+                              data-composer-action="true"
+                              onMouseDown={preserveComposerFocus}
+                              onClick={() => {
+                                setIsAddMenuOpen(false);
+                                fileInputRef.current?.click();
+                              }}
+                              className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition-all hover:bg-muted/50 active:bg-muted"
+                            >
+                              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-muted/50 text-muted-foreground">
+                                <Paperclip size={13} />
+                              </span>
+                              <span className="text-[13px] font-medium tracking-tight">上传附件</span>
+                            </button>
+                            <button
+                              type="button"
+                              data-composer-action="true"
+                              onMouseDown={preserveComposerFocus}
+                              onClick={() => {
+                                setIsAddMenuOpen(false);
+                                setIsReferenceMenuOpen(true);
+                              }}
+                              className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left transition-all hover:bg-muted/50 active:bg-muted"
+                            >
+                              <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-muted/50 text-muted-foreground">
+                                <Hash size={13} />
+                              </span>
+                              <span className="text-[13px] font-medium tracking-tight">添加引用</span>
+                            </button>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
                     <div className="relative min-w-0" ref={modelMenuRef}>
                       <button
                         type="button"
                         data-composer-action="true"
                         onMouseDown={preserveComposerFocus}
                         onClick={toggleModelMenu}
-                        className="flex h-8 max-w-[44vw] sm:max-w-full items-center gap-1.5 rounded-xl px-2.5 text-muted-foreground transition-all hover:bg-muted/50 hover:text-foreground active:scale-95"
+                        className="flex h-8 min-w-0 max-w-[44vw] sm:max-w-full items-center gap-1.5 rounded-xl px-2 text-muted-foreground transition-all hover:bg-muted/50 hover:text-foreground active:scale-95"
                       >
-                        <span className="truncate text-[12px] font-medium tracking-tight">{selectedModel?.name || "选择模型"}</span>
+                        <span className="max-w-[110px] truncate text-[12px] font-medium tracking-tight sm:max-w-[160px]">{selectedModel?.name || "选择模型"}</span>
                         <ChevronDown size={12} className={`shrink-0 transition-transform duration-500 ${isModelMenuOpen ? 'rotate-180' : ''}`} />
                       </button>
                       <AnimatePresence>

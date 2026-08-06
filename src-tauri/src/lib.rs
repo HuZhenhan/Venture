@@ -1,8 +1,15 @@
 use tauri::Manager;
 
+/// 前端“退出确认弹窗”确认后调用，真正退出应用。
+#[tauri::command]
+fn quit_app(app: tauri::AppHandle) {
+    app.exit(0);
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![quit_app])
         .setup(|app| {
             let data_dir = app
                 .path()

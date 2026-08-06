@@ -78,7 +78,7 @@ export function ToolApprovalCard({ tool, onApprove, onAlwaysApprove, onReject }:
             exit={{ height: 0, opacity: 0 }}
             transition={CARD_EXPAND_TRANSITION}
           >
-            <div className="space-y-3 px-11 pb-4 pt-1">
+            <div className="space-y-2 px-4 pb-3 pt-1">
               {/* 描述区域（预留显示位置，暂未启用：等待后续接入操作描述来源） */}
               <div>
                 <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1">
@@ -91,7 +91,7 @@ export function ToolApprovalCard({ tool, onApprove, onAlwaysApprove, onReject }:
 
               {/* 传入参数 */}
               <div>
-                <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1.5">
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1">
                   传入参数
                 </div>
                 <pre className="max-h-[240px] overflow-auto rounded-xl border border-border bg-muted/30 p-3 text-[11px] leading-relaxed text-foreground/90 font-mono whitespace-pre-wrap break-all">
@@ -100,20 +100,20 @@ export function ToolApprovalCard({ tool, onApprove, onAlwaysApprove, onReject }:
               </div>
 
               {/* 操作按钮 */}
-              <div className="flex items-center justify-between pt-1">
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                 <button
                   type="button"
                   onClick={() => onReject(tool.id)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] text-muted-foreground hover:text-[#d65a54] transition-colors"
+                  className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] whitespace-nowrap text-muted-foreground hover:text-[#d65a54] transition-colors"
                 >
                   <X size={11} />
                   拒绝
                 </button>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5">
                   <button
                     type="button"
                     onClick={() => onAlwaysApprove(tool.id)}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium rounded-lg border border-border text-foreground hover:bg-muted/50 transition-all"
+                    className="flex items-center gap-1.5 px-2.5 py-1 text-[11px] whitespace-nowrap font-medium rounded-lg border border-border text-foreground hover:bg-muted/50 transition-all"
                   >
                     <CheckCheck size={11} />
                     一律同意
@@ -121,7 +121,7 @@ export function ToolApprovalCard({ tool, onApprove, onAlwaysApprove, onReject }:
                   <button
                     type="button"
                     onClick={() => onApprove(tool.id)}
-                    className="flex items-center gap-1.5 px-4 py-1.5 text-[12px] font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-all"
+                    className="flex items-center gap-1.5 px-3 py-1 text-[11px] whitespace-nowrap font-medium rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 transition-all"
                   >
                     <Check size={11} />
                     同意

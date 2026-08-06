@@ -1,4 +1,5 @@
 <resources>
     <string name="app_name">"Venture"</string>
     <string name="main_activity_title">"Venture"</string>
+    <string name="accessibility_service_desc">"Venture 手机助手需要使用无障碍服务来读取屏幕布局并执行点击、滑动等自动化操作。"</string>
 </resources>

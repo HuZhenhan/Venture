@@ -12,6 +12,7 @@ import {
 } from '../utils/codeReferences';
 import { createUploadedResourceReference, isImageResource, readFileAsUploadedResource } from '../utils/uploadedResources';
 import { debugLog, debugError } from '../utils/debugLogger';
+import { isAndroid } from '../utils/platform';
 import { toast } from 'sonner';
 
 interface ComposerEditorHandle {
@@ -70,6 +71,13 @@ export function useChatComposer({ onMessageSent }: UseChatComposerArgs) {
   );
 
   const focusComposer = useCallback(() => {
+    if (isAndroid()) {
+      // Android WebView 中聚焦 contentEditable 必然弹出输入法。
+      // 工具栏按钮（切换模型/权限/附件/引用/发送）在 mousedown 时调用本函数
+      // 以保持桌面端"点按钮不丢失输入焦点"的体验，但在安卓上会导致误弹键盘，
+      // 故 Android 端跳过自动聚焦，输入法只由用户点击输入框时打开。
+      return;
+    }
     setIsInputFocused(true);
     editorRef.current?.focus();
   }, []);
@@ -100,6 +108,8 @@ export function useChatComposer({ onMessageSent }: UseChatComposerArgs) {
     event.preventDefault();
     focusComposer();
     closeModelMenu();
+    // “添加自定义模型”直达 API 供应商页（设置面板默认停在基础设置 tab，需先切换）
+    useLayoutStore.getState().setActiveSettingsTab('api');
     showPanel('settings');
   }, [closeModelMenu, focusComposer, showPanel]);
 

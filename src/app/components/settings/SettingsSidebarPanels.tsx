@@ -721,7 +721,6 @@ export function ProviderConfigModal({
                     <input
                       type="number"
                       min={1}
-                      max={200}
                       value={formData.inputContextWindow || ''}
                       onChange={(e) => setFormData((p) => ({ ...p, inputContextWindow: parseInt(e.target.value) || 0 }))}
                       className="w-full rounded-[20px] border-none bg-input-background px-4 py-3 text-[15px] font-medium outline-none transition-all focus:ring-4 focus:ring-primary/5"

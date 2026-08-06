@@ -28,9 +28,6 @@ export const TraceView: React.FC = () => {
   const traceRecords = useChatStore((s) => s.traceRecords);
   const clearTraceRecords = useChatStore((s) => s.clearTraceRecords);
   const clearTraceRecordsOnly = useChatStore((s) => s.clearTraceRecordsOnly);
-  const chatTitle = useChatStore((s) =>
-    s.tracedChatId ? s.chats.find((c) => c.id === s.tracedChatId)?.title ?? null : null
-  );
 
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
@@ -119,10 +116,10 @@ export const TraceView: React.FC = () => {
     : selectedRecord?.response.rawEvents.length;
 
   return (
-    <div className="h-full w-[420px] flex flex-col border-l border-border bg-background/95 backdrop-blur-xl overflow-hidden">
+    <div className="h-full w-[min(420px,100%)] flex flex-col border-l border-border bg-background/95 backdrop-blur-xl overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-border shrink-0">
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 min-w-0">
           <Bug size={14} className="text-amber-500 shrink-0" />
 
           {/* Mode Switch */}
@@ -152,11 +149,6 @@ export const TraceView: React.FC = () => {
           {traceRecords.length > 0 && (
             <span className="flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-amber-500/10 text-amber-600 text-[10px] font-bold shrink-0">
               {traceRecords.length}
-            </span>
-          )}
-          {chatTitle && (
-            <span className="text-[10px] text-muted-foreground truncate ml-1 max-w-[80px]">
-              {chatTitle}
             </span>
           )}
         </div>

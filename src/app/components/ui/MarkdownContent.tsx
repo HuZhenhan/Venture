@@ -260,7 +260,7 @@ export const MarkdownContent = memo(function MarkdownContent({
     <TypingCtx.Provider value={isTyping}>
       <TextLenCtx.Provider value={textLen}>
         <div
-          className={`markdown-content min-w-0 text-[16px] leading-[1.7] tracking-tight text-foreground font-normal ${className}`}
+          className={`markdown-content min-w-0 text-[14px] leading-[1.7] tracking-tight text-foreground font-normal ${className}`}
         >
           <ReactMarkdown remarkPlugins={REMARK_PLUGINS} components={MD_COMPONENTS}>
             {displayedText}

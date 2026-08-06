@@ -150,6 +150,9 @@ build_rust() {
 
   info "编译 Rust ($RUST_TARGET)..."
   cd "$PROJECT_ROOT"
+  # Tauri 在前端 assets 编译期嵌入 .so；touch build.rs 强制 build.rs 重跑，
+  # 避免 Rust 源码未变化时 cargo 跳过 build.rs 导致 .so 内嵌旧版前端。
+  touch "$TAURI_DIR/build.rs"
   cargo build \
     --manifest-path "$TAURI_DIR/Cargo.toml" \
     --target "$RUST_TARGET" \
@@ -244,9 +247,12 @@ install_apk() {
   info "检测到 $DEVICE_COUNT 个设备"
   echo "$DEVICES"
 
-  info "安装 APK..."
-  adb uninstall com.venture.app 2>/dev/null || true
-  adb install "$FINAL_APK" 2>&1
+  info "安装 APK (覆盖安装，保留应用数据)..."
+  if ! adb install -r "$FINAL_APK" 2>&1; then
+    warn "覆盖安装失败（可能是签名不一致），回退为卸载后重装（将清空应用数据）"
+    adb uninstall com.venture.app 2>/dev/null || true
+    adb install "$FINAL_APK" 2>&1
+  fi
   ok "安装完成！"
 }
 
@@ -263,14 +269,9 @@ detect_env
 
 START_TIME=$(date +%s)
 
-# 并行构建前端和 Rust
-build_frontend &
-FRONT_PID=$!
-build_rust &
-RUST_PID=$!
-
-wait $FRONT_PID
-wait $RUST_PID
+# 顺序构建：前端必须先于 Rust，确保 build.rs 嵌入的是最新 dist
+build_frontend
+build_rust
 
 copy_artifacts
 build_gradle

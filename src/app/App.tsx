@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { MainLayout } from "./components/MainLayout";
+import { BackExitConfirmDialog } from "./components/BackExitConfirmDialog";
 import { FpsOverlay } from "./components/debug/FpsOverlay";
 import { useThemeStore } from "./store/useThemeStore";
 import { useChatStore } from "./store/useChatStore";
@@ -86,6 +87,7 @@ export default function App() {
     <>
       <MainLayout />
       <FpsOverlay />
+      <BackExitConfirmDialog />
     </>
   );
 }

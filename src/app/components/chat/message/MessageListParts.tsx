@@ -416,7 +416,7 @@ const MessageBlock = memo(function MessageBlock({
       return (
         <div className="flex justify-end">
           <MessageTextSelectionMenu>
-            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }} className="inline-block rounded-2xl rounded-tr-sm bg-muted/80 px-5 py-3 text-left text-[16px] font-medium leading-[1.6] tracking-tight text-foreground select-text whitespace-pre-wrap break-words">
+            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }} className="inline-block rounded-2xl rounded-tr-sm bg-muted/80 px-5 py-3 text-left text-[14px] font-medium leading-[1.6] tracking-tight text-foreground select-text whitespace-pre-wrap break-words">
               <UserTextWithReferencePills
                 content={block.content}
                 references={references}

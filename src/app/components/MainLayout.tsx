@@ -7,6 +7,9 @@ import { SidebarToggleButton } from './SidebarToggleButton';
 import { RightPanelRail } from './RightPanelRail';
 import { BrowserPanel } from './BrowserPanel';
 import { WorkflowCanvas } from './WorkflowCanvas';
+import { ScriptPanel } from './scripts/ScriptPanel';
+import { ProgressToast } from './agent/ProgressToast';
+import { AccessibilityPermissionDialog } from './agent/AccessibilityPermissionDialog';
 import { DesktopPanels, SinglePagePanels } from './layout/MainLayoutPanels';
 import { useChatStore } from '../store/useChatStore';
 import { 
@@ -26,6 +29,7 @@ import {
   selectToggleBrowser,
   selectToggleBrowserSummary,
   selectToggleWorkflow,
+  selectToggleScripts,
   selectSyncPanelVisibility,
   selectShowChatPanel,
   selectTogglePanel,
@@ -64,6 +68,7 @@ export function MainLayout() {
   const toggleBrowser = useLayoutStore(selectToggleBrowser);
   const toggleBrowserSummary = useLayoutStore(selectToggleBrowserSummary);
   const toggleWorkflow = useLayoutStore(selectToggleWorkflow);
+  const toggleScripts = useLayoutStore(selectToggleScripts);
   const syncPanelVisibility = useLayoutStore(selectSyncPanelVisibility);
   const showChatPanel = useLayoutStore(selectShowChatPanel);
   const togglePanel = useLayoutStore(selectTogglePanel);
@@ -150,6 +155,7 @@ export function MainLayout() {
   });
   const showDockedBrowser = !singlePageMode && adaptiveVisibility.showBrowser;
   const showDockedWorkflow = !singlePageMode && adaptiveVisibility.showWorkflow;
+  const showDockedScripts = !singlePageMode && adaptiveVisibility.showScripts;
 
   const toggleSettings = useCallback(() => togglePanel('settings'), [togglePanel]);
   const toggleUsage = useCallback(() => togglePanel('usage'), [togglePanel]);
@@ -157,6 +163,7 @@ export function MainLayout() {
   const handleToggleBrowser = useCallback(() => toggleBrowser(), [toggleBrowser]);
   const handleToggleBrowserSummary = useCallback(() => toggleBrowserSummary(), [toggleBrowserSummary]);
   const handleToggleWorkflow = useCallback(() => toggleWorkflow(), [toggleWorkflow]);
+  const handleToggleScripts = useCallback(() => toggleScripts(), [toggleScripts]);
 
   // ── Lazy panel mounting ──────────────────────────────────────────────────────
   // Panels that have never been opened are NOT mounted in the DOM, saving initial
@@ -173,6 +180,8 @@ export function MainLayout() {
       <div className="fixed inset-0 z-0 opacity-[0.08] pointer-events-none">
         <img src={AMBIENT_BG} alt="" className="w-full h-full object-cover" />
       </div>
+      <ProgressToast />
+      <AccessibilityPermissionDialog />
       <div className="relative flex-1 flex overflow-hidden">
         <motion.div
           initial={false}
@@ -273,6 +282,16 @@ export function MainLayout() {
               <WorkflowCanvas />
             </motion.div>
 
+            {/* 脚本管理面板：与对话区域同级平铺 */}
+            <motion.div
+              initial={false}
+              animate={{ width: showDockedScripts ? responsiveWidths.scriptsWidth : 0, opacity: showDockedScripts ? 1 : 0 }}
+              transition={PANEL_TRANSITION}
+              className={`shrink-0 flex h-full overflow-hidden ${showDockedScripts ? 'border-l border-border' : 'pointer-events-none'}`}
+            >
+              <ScriptPanel width={responsiveWidths.scriptsWidth} />
+            </motion.div>
+
             {/* 小屏幕下的遮罩层 (与左侧栏对齐的逻辑) */}
             <AnimatePresence>
               {singlePageMode && adaptiveVisibility.singlePageView !== 'chat' && (
@@ -340,12 +359,14 @@ export function MainLayout() {
                 isBrowserActive={railState.browserActive}
                 isBrowserSummaryOpen={isBrowserSummaryOpen}
                 isWorkflowActive={railState.workflowActive}
+                isScriptsActive={railState.scriptsActive}
                 onShowChat={showChat}
                 onToggleSettings={toggleSettings}
                 onToggleUsage={toggleUsage}
                 onToggleBrowser={handleToggleBrowser}
                 onToggleBrowserSummary={handleToggleBrowserSummary}
                 onToggleWorkflow={handleToggleWorkflow}
+                onToggleScripts={handleToggleScripts}
               />
             </div>
           </motion.div>

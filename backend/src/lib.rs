@@ -4,7 +4,9 @@ pub mod crypto;
 pub mod error;
 pub mod file_history;
 pub mod provider;
+pub mod agent;
 pub mod chat;
+pub mod script;
 pub mod task_store;
 pub mod tools;
 
@@ -39,6 +41,7 @@ pub(crate) struct AppState {
     pub(crate) task_store: Arc<TaskStore>,
     pub(crate) read_tracker: Arc<tools::ReadTracker>,
     pub(crate) file_history: Arc<file_history::FileHistory>,
+    pub(crate) agent_router: agent::AgentRouter,
     startup_nonce: String,
 }
 
@@ -293,6 +296,155 @@ async fn update_task_full(
     Ok(Json(s.task_store.update(&q.chat_id, &id, req).await?))
 }
 
+// ─── 手机助手 Agent 路由处理器（规格书 8.1） ─────────────────────────────
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentToolRequest {
+    tool: String,
+    #[serde(default)]
+    args: Value,
+    #[serde(default)]
+    chat_id: String,
+}
+
+async fn agent_tool_handler(
+    State(s): State<AppState>,
+    Json(body): Json<AgentToolRequest>,
+) -> Json<Value> {
+    Json(s.agent_router.execute(&body.tool, &body.args, &body.chat_id).await)
+}
+
+async fn agent_tool_schemas_handler() -> Json<Value> {
+    Json(json!({ "tools": agent::schemas::all_tool_schemas() }))
+}
+
+#[derive(Debug, Deserialize)]
+struct TraceQuery {
+    #[serde(default)]
+    chat_id: Option<String>,
+    #[serde(default)]
+    limit: Option<usize>,
+}
+
+async fn agent_trace_handler(
+    State(s): State<AppState>,
+    Query(q): Query<TraceQuery>,
+) -> Json<Value> {
+    let entries = s
+        .agent_router
+        .trace
+        .list(q.chat_id.as_deref(), q.limit.unwrap_or(100));
+    Json(json!({ "trace": entries }))
+}
+
+async fn agent_health_handler(State(s): State<AppState>) -> Json<Value> {
+    Json(s.agent_router.bridge.health().await)
+}
+
+async fn agent_permission_state_handler(State(s): State<AppState>) -> Json<Value> {
+    Json(s.agent_router.bridge.call_tool("__permission_state__", &json!({})).await)
+}
+
+async fn agent_permission_open_handler(State(s): State<AppState>) -> Json<Value> {
+    Json(s.agent_router.bridge.call_tool("__open_accessibility_settings__", &json!({})).await)
+}
+
+// ─── 脚本注册表路由（规格书 8.1 / DSL §12） ──────────────────────────────
+
+async fn list_scripts_handler(State(s): State<AppState>) -> Json<Value> {
+    Json(json!({ "scripts": s.agent_router.engine.registry.list().await }))
+}
+
+async fn get_script_handler(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    match s.agent_router.engine.registry.get(&name).await {
+        Some(script) => Ok(Json(json!({ "script": script }))),
+        None => Err(AppError::ToolExecutionError(format!("脚本不存在: {name}"))),
+    }
+}
+
+async fn upsert_script_handler(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+    Json(mut body): Json<script::ScriptDef>,
+) -> Json<Value> {
+    body.name = name;
+    Json(s.agent_router.register_script(body, script::ScriptSource::User).await)
+}
+
+async fn import_script_handler(
+    State(s): State<AppState>,
+    Json(body): Json<script::ScriptDef>,
+) -> Json<Value> {
+    Json(s.agent_router.register_script(body, script::ScriptSource::Shared).await)
+}
+
+async fn delete_script_handler(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+) -> Json<Value> {
+    match s.agent_router.engine.registry.delete(&name).await {
+        Ok(()) => Json(json!({ "ok": true })),
+        Err(e) => Json(json!({
+            "ok": false,
+            "error": { "code": "delete_failed", "message": e }
+        })),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SetEnabledRequest {
+    enabled: bool,
+}
+
+async fn set_script_enabled_handler(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<SetEnabledRequest>,
+) -> Json<Value> {
+    match s.agent_router.engine.registry.set_enabled(&name, body.enabled).await {
+        Ok(()) => Json(json!({ "ok": true })),
+        Err(e) => Json(json!({
+            "ok": false,
+            "error": { "code": "update_failed", "message": e }
+        })),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RunScriptRequest {
+    #[serde(default)]
+    params: Value,
+    #[serde(default)]
+    confirmed: bool,
+    #[serde(default)]
+    chat_id: String,
+}
+
+async fn run_script_handler(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<RunScriptRequest>,
+) -> Json<Value> {
+    Json(s
+        .agent_router
+        .engine
+        .run_script(&name, body.params, &body.chat_id, body.confirmed, 0)
+        .await)
+}
+
+async fn validate_script_handler(
+    State(s): State<AppState>,
+    Json(body): Json<script::ScriptDef>,
+) -> Json<Value> {
+    let report = s.agent_router.engine.validate(&body).await;
+    Json(json!({ "ok": true, "report": report.to_json() }))
+}
+
 fn generate_nonce() -> String {
     use rand::RngCore;
     let mut buf = [0u8; 16];
@@ -515,7 +667,7 @@ pub async fn run_server(data_dir: Option<PathBuf>) -> anyhow::Result<()> {
         .unwrap_or_else(|_| PathBuf::from("."))
         .join(".mytool");
     let store = Arc::new(ConfigStore::load(data_dir.clone()).await?);
-    let app_data = Arc::new(AppDataStore::load(data_dir).await?);
+    let app_data = Arc::new(AppDataStore::load(data_dir.clone()).await?);
     let task_store = Arc::new(TaskStore::new(tasks_dir));
     let read_tracker = Arc::new(tools::ReadTracker::new());
     let file_history = Arc::new(
@@ -535,7 +687,22 @@ pub async fn run_server(data_dir: Option<PathBuf>) -> anyhow::Result<()> {
     );
 
     let startup_nonce = generate_nonce();
-    let state = AppState { store, app_data, http, task_store, read_tracker, file_history, startup_nonce };
+
+    // 手机助手：原生桥 + 执行轨迹 + 脚本引擎（规格书 8.1）
+    let scripts_dir = config::app_data_dir(data_dir.as_ref())
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("scripts");
+    let script_registry = Arc::new(script::ScriptRegistry::load(scripts_dir).await?);
+    let native_bridge = agent::NativeBridge::new();
+    let trace_store = Arc::new(agent::TraceStore::new());
+    let script_engine = script::ScriptEngine::new(
+        script_registry,
+        native_bridge.clone(),
+        trace_store.clone(),
+    );
+    let agent_router = agent::AgentRouter::new(native_bridge, trace_store, script_engine);
+
+    let state = AppState { store, app_data, http, task_store, read_tracker, file_history, agent_router, startup_nonce };
 
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(
@@ -592,6 +759,23 @@ pub async fn run_server(data_dir: Option<PathBuf>) -> anyhow::Result<()> {
         .route("/api/files/sync-out", post(sync_out_handler))
         .route("/api/files/sync-status", get(sync_status_handler))
         .route("/api/files/gc", post(run_gc_handler))
+        // 手机助手 Agent（规格书 8.1）：通用工具调用 / schema 同步 / 执行轨迹 / 桥健康 / 权限引导
+        .route("/api/agent/tool", post(agent_tool_handler))
+        .route("/api/agent/tool-schemas", get(agent_tool_schemas_handler))
+        .route("/api/agent/trace", get(agent_trace_handler))
+        .route("/api/agent/health", get(agent_health_handler))
+        .route("/api/agent/permission", get(agent_permission_state_handler))
+        .route("/api/agent/permission/open", post(agent_permission_open_handler))
+        // 脚本注册表 CRUD + 运行 + 校验 + 导入（DSL §12）
+        .route("/api/agent/scripts", get(list_scripts_handler))
+        .route("/api/agent/scripts/validate", post(validate_script_handler))
+        .route("/api/agent/scripts/import", post(import_script_handler))
+        .route(
+            "/api/agent/scripts/:name",
+            get(get_script_handler).put(upsert_script_handler).delete(delete_script_handler),
+        )
+        .route("/api/agent/scripts/:name/enabled", post(set_script_enabled_handler))
+        .route("/api/agent/scripts/:name/run", post(run_script_handler))
         .layer(DefaultBodyLimit::max(REQUEST_BODY_LIMIT))
         .layer(cors)
         .with_state(state);

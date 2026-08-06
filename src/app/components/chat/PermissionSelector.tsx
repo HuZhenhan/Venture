@@ -88,11 +88,11 @@ export function PermissionSelector({ preserveComposerFocus }: PermissionSelector
         data-composer-action="true"
         onMouseDown={preserveComposerFocus}
         onClick={toggleMenu}
-        className="flex h-8 max-w-[44vw] sm:max-w-full items-center gap-1.5 rounded-xl px-2.5 text-muted-foreground transition-all hover:bg-muted/50 hover:text-foreground active:scale-95"
+        className="flex h-8 min-w-0 max-w-[44vw] sm:max-w-full items-center gap-1.5 rounded-xl px-2 text-muted-foreground transition-all hover:bg-muted/50 hover:text-foreground active:scale-95"
         title={`工具权限：${TOOL_PERMISSION_LABELS[currentLevel]}`}
       >
         <CurrentIcon size={13} className="shrink-0" strokeWidth={2.1} />
-        <span className="truncate text-[12px] font-medium tracking-tight">{TOOL_PERMISSION_LABELS[currentLevel]}</span>
+        <span className="max-w-[96px] truncate text-[12px] font-medium tracking-tight sm:max-w-[140px]">{TOOL_PERMISSION_LABELS[currentLevel]}</span>
         <ChevronDown size={12} className={`shrink-0 transition-transform duration-500 ${isOpen ? 'rotate-180' : ''}`} />
       </button>
       <AnimatePresence>
