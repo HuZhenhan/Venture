@@ -1,6 +1,7 @@
 # AI_COLLAB_SPEC
 
 ## 通用组件清单
+
 - `SettingsSidebar` - 系统偏好与 Provider 设置入口 - 通过 `SettingsSidebarProps` 传入开关状态、宽度和 Provider 列表。
 - `PreferencesPanel` - 系统偏好和统一存储迁移面板 - 通过 `migrationSummary`、`migrationStatus`、`onMigrateLegacyLocalData` 展示并触发旧 localStorage 迁移。
 - `BrowserPanel` - 桌面端内置浏览器面板 - 通过 `isOpen`、`onClose`、`isNativeViewHidden` 控制 Electron 原生 BrowserView 显示；收起时立即隐藏原生网页，展开动画结束后显示“正在恢复浏览器...”并延迟挂载 BrowserView；工具栏摘要按钮通过本地 IPC 在网页内展示一次性核心信息摘取预览动画。
@@ -12,6 +13,7 @@
 - `MessageContentRenderer` - 对话协议内容统一解析与递归渲染 - 消费 `Message.content` 中的 `[thinking]`、`[error]`、`[attachment]` 节点，复用思考卡、错误卡和附件引用卡。
 
 ## 对话内容协议
+
 - 权威持久化字段：`Message.content`，正文、模型 API 实际返回的 reasoning、错误和附件均以原始标签字符串保存；`Message.rawResponse` 仅保存本次模型输出的未归一化 delta，用于调试，不参与模型上下文。
 - 标签格式：`[thinking]...[/thinking]`、`[error][code]...[/code][message]...[/message][/error]`、`[attachment]...[/attachment]`；标签允许嵌套。
 - `src/app/utils/messageContentProtocol.ts`：负责白名单解析、嵌套节点序列化、流式未闭合标签容错、错误/附件字段编解码和旧 blocks 运行时适配。
@@ -21,6 +23,7 @@
 - 限制：前端只显示模型 API 实际返回的 reasoning；供应商未返回的内部推理无法恢复。
 
 ## 设计规范
+
 - 主色值：沿用 Tailwind/CSS 变量 `primary`、`background`、`foreground`、`border`。
 - 辅助色值：设置卡片使用 `bg-background/50`、禁用按钮使用 `bg-muted/60`。
 - 字体大小：设置标题 `13px`，说明文字 `11px`，迁移按钮 `12px`。
@@ -30,6 +33,7 @@
 - 普通助手 Markdown 文本：通过 `MarkdownContent` 的 `className="ml-[8px]"` 增加 `8px` 左偏移；用户消息、思考链和其他卡片保持原位置。
 
 ## 项目架构
+
 - `scripts/dev-control.js`：开发态进程编排入口，接管 `npm run dev`，管理 Web Vite、桌面 Vite、Electron 桌面壳，并支持命令行交互重启。
 - `electron/main.cjs`：Electron 主进程、桌面窗口生命周期、后端子进程生命周期；开发态关闭全部窗口时保持 Electron 和后端进程存活。
 - `backend/src/app_data.rs`：统一应用数据文件存储，路径为 Windows `%APPDATA%/Venture/app-data.json`。
@@ -40,6 +44,7 @@
 - `src/app/store/useThemeStore.ts`：主题后端优先持久化。
 
 ## 工具函数 / 常量
+
 - `restartBackendForDev` - 开发态重启后端进程 - 参数：无 - 返回后端重启 Promise，串行防止重复重启。
 - `reloadFrontendForDev` - 开发态重载桌面前端 - 参数：无 - 返回值：无；无窗口时会重新创建桌面窗口。
 - `scripts/dev-control.js` 交互命令 - 开发态进程控制 - 参数：`restart frontend` / `restart backend` / `restart all` 或 `rs fe` / `rs be` / `rs all` - 返回命令行执行日志。
@@ -69,12 +74,14 @@
 - `parseDebugCommand` - 解析对话输入调试命令 - 参数：`input` - 返回 `{ module, enabled }` 或 `null`；支持 `/debug OriginalContent true|false`、`/debug RawResponse true|false`、`/debug OccupancyMonitor true|false`，并兼容 `ture/flase`。
 
 ## 标准化 API
+
 - `GET /api/app-data` - 读取统一应用数据 - 参数：无 - 返回 `{ chats, activeChatId, preferences, theme, updatedAt }`。
 - `PUT /api/app-data` - 覆盖统一应用数据 - 参数：完整 `AppDataFile` - 返回更新后的完整数据。
 - `PATCH /api/app-data` - 增量更新统一应用数据 - 参数：`chats?`、`activeChatId?`、`preferences?`、`theme?` - 返回更新后的完整数据。
 - `POST /api/app-data/migrate` - 执行旧数据迁移 - 参数：`{ source: AppDataPatch }` - 返回合并后的完整数据。
 
 ## 迁移规则
+
 - 聊天记录：按 `chat.id` 增量合并；同 ID 时保留迁移来源版本。
 - API Key / Provider：启动时从旧加密配置增量合并；同 Provider 补齐缺失 API Key 和模型，不删除现有项。
 - 其他设置：迁移时用所选来源覆盖统一存储中的偏好和主题。

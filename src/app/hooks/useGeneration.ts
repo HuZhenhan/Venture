@@ -548,51 +548,106 @@ export function useGeneration() {
         return;
       }
 
-      // 构建 API 消息列表：展开 assistant 消息中的 tool_calls 为 assistant+tool 消息对
+      // 构建 API 消息列表：展开 assistant 消息中的 tool_calls 为 assistant+tool 消息对。
+      // continue 模式会在同一条消息中累积多轮工具循环（文字与 tool_calls 追加拼接）。
+      // 若按整条消息原样发送（content 拼接 + 全部 tool_calls），模型无法区分轮次边界，
+      // 容易把之前轮次的文字当作工具结果复读（表现为重复回复）。因此优先用 segments
+      // （按流式到达顺序记录 reasoning/content/tool_calls 边界）重建为标准多轮消息序列，
+      // 与 DeepSeek/OpenAI 官方工具调用格式一致：每条 assistant 消息 = 该轮文字 + 该轮
+      // reasoning_content + 该轮 tool_calls，tool 结果紧随其后。
       const apiMessages: ChatMessage[] = [];
       for (const msg of chat.messages) {
         // 首轮生成时跳过当前（空占位）消息；continue 模式需包含已有内容和工具调用/结果
         if (msg.id === aiMessageId && !isContinue) continue;
         const content = adaptLegacyMessageContent(msg);
-        const role = msg.role === 'user' ? 'user' as const : 'assistant' as const;
         const apiContent = buildChatMessageContentFromProtocol(
           content,
           msg.role === 'user' && (activeModel.supportsMultimodal ?? false),
         );
 
-        const reasoningContent = role === 'assistant' && msg.reasoning
-          ? { reasoning_content: msg.reasoning }
-          : {};
+        if (msg.role === 'user') {
+          apiMessages.push({ role: 'user', content: apiContent });
+          continue;
+        }
 
-        if (msg.toolCalls && msg.toolCalls.length > 0) {
-          // 只包含已执行完毕的 tool calls，避免 pending/running 状态的工具没有对应 tool 结果而触
-          // 发 "role 'tool' must be a response to a preceding message with 'tool_calls'" 错误
-          const resolvedCalls = msg.toolCalls.filter(
-            (tc) => tc.status === 'completed' || tc.status === 'failed',
-          );
-          if (resolvedCalls.length > 0) {
-            apiMessages.push({
-              role,
-              content: apiContent,
-              ...reasoningContent,
-              tool_calls: resolvedCalls.map((tc) => ({
+        // ── AI 消息：有 segments 时按轮次重建标准消息序列 ──────────────
+        const segs = msg.segments ?? [];
+        if (segs.length > 0) {
+          let bufContent = '';
+          let bufReasoning = '';
+          let bufCalls: Array<{ id: string; name: string; input: unknown; output: string }> = [];
+          const flush = () => {
+            if (!bufContent && !bufReasoning && bufCalls.length === 0) return;
+            const assistantMsg: ChatMessage = { role: 'assistant', content: bufContent };
+            if (bufReasoning) assistantMsg.reasoning_content = bufReasoning;
+            if (bufCalls.length > 0) {
+              assistantMsg.tool_calls = bufCalls.map((tc) => ({
                 id: tc.id,
                 type: 'function' as const,
                 function: { name: tc.name, arguments: JSON.stringify(tc.input ?? {}) },
-              })),
-            });
-            for (const tc of resolvedCalls) {
-              apiMessages.push({
-                role: 'tool',
-                tool_call_id: tc.id,
-                content: tc.output ?? '',
-              });
+              }));
+              apiMessages.push(assistantMsg);
+              // tool 结果紧随该条 assistant 消息
+              for (const tc of bufCalls) {
+                apiMessages.push({ role: 'tool', tool_call_id: tc.id, content: tc.output });
+              }
+            } else {
+              apiMessages.push(assistantMsg);
             }
-          } else {
-            apiMessages.push({ role, content: apiContent, ...reasoningContent });
+            bufContent = '';
+            bufReasoning = '';
+            bufCalls = [];
+          };
+          for (const seg of segs) {
+            if (seg.type === 'reasoning') {
+              bufReasoning += seg.content;
+            } else if (seg.type === 'content') {
+              bufContent += seg.content;
+            } else if (seg.type === 'tool_calls') {
+              // 只回传已执行完毕的调用，避免 pending/running 状态没有对应 tool 结果
+              for (const c of seg.calls) {
+                const full = (msg.toolCalls ?? []).find((tc) => tc.id === c.id);
+                if (full && (full.status === 'completed' || full.status === 'failed')) {
+                  bufCalls.push({
+                    id: full.id,
+                    name: full.name,
+                    input: full.input,
+                    output: full.output ?? '',
+                  });
+                }
+              }
+              flush();
+            }
+          }
+          flush();
+          continue;
+        }
+
+        // ── 兼容旧格式（无 segments）：整条消息 + 全部 tool_calls ──────
+        const reasoningContent = msg.reasoning
+          ? { reasoning_content: msg.reasoning }
+          : {};
+        // 只包含已执行完毕的 tool calls，避免 pending/running 状态的工具没有对应 tool 结果而触
+        // 发 "role 'tool' must be a response to a preceding message with 'tool_calls'" 错误
+        const resolvedCalls = (msg.toolCalls ?? []).filter(
+          (tc) => tc.status === 'completed' || tc.status === 'failed',
+        );
+        if (resolvedCalls.length > 0) {
+          apiMessages.push({
+            role: 'assistant',
+            content: apiContent,
+            ...reasoningContent,
+            tool_calls: resolvedCalls.map((tc) => ({
+              id: tc.id,
+              type: 'function' as const,
+              function: { name: tc.name, arguments: JSON.stringify(tc.input ?? {}) },
+            })),
+          });
+          for (const tc of resolvedCalls) {
+            apiMessages.push({ role: 'tool', tool_call_id: tc.id, content: tc.output ?? '' });
           }
         } else {
-          apiMessages.push({ role, content: apiContent, ...reasoningContent });
+          apiMessages.push({ role: 'assistant', content: apiContent, ...reasoningContent });
         }
       }
 

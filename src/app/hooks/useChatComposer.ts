@@ -100,6 +100,8 @@ export function useChatComposer({ onMessageSent }: UseChatComposerArgs) {
     event.preventDefault();
     focusComposer();
     closeModelMenu();
+    // “添加自定义模型”直达 API 供应商页（设置面板默认停在基础设置 tab，需先切换）
+    useLayoutStore.getState().setActiveSettingsTab('api');
     showPanel('settings');
   }, [closeModelMenu, focusComposer, showPanel]);
 

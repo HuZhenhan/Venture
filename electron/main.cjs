@@ -1,7 +1,7 @@
 const path = require('node:path');
 const fs = require('node:fs');
 const os = require('node:os');
-const { app, BrowserWindow, BrowserView, shell, ipcMain, Menu } = require('electron');
+const { app, BrowserWindow, BrowserView, shell, ipcMain, Menu, Tray, nativeImage } = require('electron');
 const { spawn } = require('node:child_process');
 const net = require('node:net');
 const http = require('node:http');
@@ -28,6 +28,11 @@ let mainWindowRef = null;
 let browserViewRef = null;
 let browserVisible = false;
 let backendRestartPromise = null;
+let trayRef = null;
+let isQuitting = false;
+
+// 托盘图标（32x32，深蓝渐变圆角方块 + 白色 V 字，由 scripts/gen-tray-icon.cjs 生成）
+const TRAY_ICON_DATA_URL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAABfElEQVR42sWXWU/CQBRG55cp7oobLoiKoI/irqCAgviXaae8fuYONBmadtZSTnJfOSdt57YwpqH0G2GNZhhhfRhhg2YQYXMQYetnOtvfEXZo+hy7fY49mh5HucfBXFgdTVAaRfCVl7sc+12Og6/paMUrfxMsSn74yXFE08kIKUp+3OGodEIUdtnT5JV2IqBo+Uk7xOmHFJEml3GVyyTl8wEKeYyPPEaWn73PAkzkMT7ymFh+TvMWgiXvuQrTe65ClldFQOKB0+EjJ2R59TUES3vadeQlv6CArKOmIuuo2cprIiDjnOuwkYuAFHntJQBTLRkVySXjIr+kANWS0WEiJ7LkV8+zANWS8UUlFwEmG25R8uunAMxkvToHaOR1EZDDenWV1x8DMJtXat7yGwqweZ+bYipviADLj4k85Y2HAMzlSyYveZMCCBu5KsBJTtjI4/e5r7zZSgTYyFW73VR+2xrPfxkvVS4CCpTf3Y/T/x0tVS5T2GU3wVeu+/1/X0UKhtGGHj4AAAAASUVORK5CYII=';
 
 const BROWSER_DEFAULT_URL = 'https://www.bing.com';
 
@@ -550,6 +555,45 @@ function setBrowserBounds(bounds) {
   }
 }
 
+function ensureTray() {
+  if (trayRef) return trayRef;
+  try {
+    const icon = nativeImage.createFromDataURL(TRAY_ICON_DATA_URL);
+    trayRef = new Tray(icon);
+    trayRef.setToolTip('Venture');
+    trayRef.setContextMenu(Menu.buildFromTemplate([
+      { label: '显示主窗口', click: () => showMainWindow() },
+      { type: 'separator' },
+      { label: '退出', click: () => quitApp() },
+    ]));
+    trayRef.on('click', () => showMainWindow());
+    trayRef.on('double-click', () => showMainWindow());
+    console.log('[tray] tray created');
+  } catch (err) {
+    console.error(`[tray] create failed: ${err.message}`);
+  }
+  return trayRef;
+}
+
+function destroyTray() {
+  try {
+    trayRef?.destroy();
+  } catch (_) {}
+  trayRef = null;
+}
+
+function showMainWindow() {
+  if (!mainWindowRef || mainWindowRef.isDestroyed()) return;
+  if (mainWindowRef.isMinimized()) mainWindowRef.restore();
+  mainWindowRef.show();
+  mainWindowRef.focus();
+}
+
+function quitApp() {
+  isQuitting = true;
+  app.quit();
+}
+
 function registerIpcHandlers() {
   if (ipcRegistered) return;
   ipcRegistered = true;
@@ -568,6 +612,15 @@ function registerIpcHandlers() {
   });
   ipcMain.on('close-window', () => {
     try { mainWindowRef?.close(); } catch (_) {}
+  });
+
+  ipcMain.on('hide-to-tray', () => {
+    ensureTray();
+    try { mainWindowRef?.hide(); } catch (_) {}
+  });
+
+  ipcMain.on('quit-app', () => {
+    quitApp();
   });
 
   ipcMain.handle('get-backend-info', () => ({
@@ -681,6 +734,18 @@ function createMainWindow() {
     if (mainWindowRef === mainWindow) mainWindowRef = null;
   });
 
+  // 关闭确认：点 X / Alt+F4 关闭窗口时先通知渲染进程弹确认框，
+  // 由用户选择“退出”或“最小化到托盘”；真正退出流程（quitApp）直接放行。
+  mainWindow.on('close', (event) => {
+    if (isQuitting) return;
+    event.preventDefault();
+    try {
+      mainWindow.webContents.send('window-close-requested');
+    } catch (err) {
+      console.warn(`[window] send close-request failed: ${err.message}`);
+    }
+  });
+
   mainWindow.once('ready-to-show', () => {
     console.log('[window] ready-to-show — displaying');
     mainWindow.show();
@@ -781,57 +846,72 @@ process.on('unhandledRejection', (reason) => {
   if (reason instanceof Error && reason.stack) write(reason.stack);
 });
 
-app.whenReady().then(async () => {
-  initLogger();
-  console.log('[main] app ready');
-  setupDevControlInput();
+// 单实例锁：重复点击启动图标时不再创建新窗口，而是聚焦已有实例的主窗口
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  console.log('[main] another instance is already running, exiting');
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    console.log('[main] second-instance: focusing existing main window');
+    showMainWindow();
+  });
 
-  registerIpcHandlers();
+  app.whenReady().then(async () => {
+    initLogger();
+    console.log('[main] app ready');
+    setupDevControlInput();
 
-  console.log('[main] starting backend...');
-  startBackend();
+    registerIpcHandlers();
 
-  console.log('[main] waiting for backend...');
-  backendReady = await waitForBackend();
+    console.log('[main] starting backend...');
+    startBackend();
 
-  if (!backendReady) {
-    console.warn('[main] backend not ready — continuing anyway (UI will handle reconnect)');
-  } else {
-    console.log('[main] backend ready ✓');
-  }
+    console.log('[main] waiting for backend...');
+    backendReady = await waitForBackend();
 
-  createMainWindow();
+    if (!backendReady) {
+      console.warn('[main] backend not ready — continuing anyway (UI will handle reconnect)');
+    } else {
+      console.log('[main] backend ready ✓');
+    }
 
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createMainWindow();
+    createMainWindow();
+
+    app.on('activate', () => {
+      if (BrowserWindow.getAllWindows().length === 0) {
+        createMainWindow();
+      }
+    });
+  });
+
+  app.on('window-all-closed', async () => {
+    console.log('[main] all windows closed');
+    destroyTray();
+    if (!app.isPackaged) {
+      console.log('[main] dev mode keeps Electron alive after all windows closed');
+      return;
+    }
+    await stopBackend();
+    if (logStream && !logStream.destroyed) {
+      console.log('[main] closing log streams');
+      logStream.end();
+    }
+    if (latestStream && !latestStream.destroyed) latestStream.end();
+    logStreamsClosed = true;
+    if (process.platform !== 'darwin') {
+      app.quit();
     }
   });
-});
 
-app.on('window-all-closed', async () => {
-  console.log('[main] all windows closed');
-  if (!app.isPackaged) {
-    console.log('[main] dev mode keeps Electron alive after all windows closed');
-    return;
-  }
-  await stopBackend();
-  if (logStream && !logStream.destroyed) {
-    console.log('[main] closing log streams');
-    logStream.end();
-  }
-  if (latestStream && !latestStream.destroyed) latestStream.end();
-  logStreamsClosed = true;
-  if (process.platform !== 'darwin') {
-    app.quit();
-  }
-});
-
-app.on('before-quit', async (event) => {
-  if (backendProcess) {
-    event.preventDefault();
-    try { console.log('[main] before-quit — awaiting backend shutdown'); } catch (_) {}
-    await stopBackend();
-    app.quit();
-  }
-});
+  app.on('before-quit', async (event) => {
+    isQuitting = true;
+    destroyTray();
+    if (backendProcess) {
+      event.preventDefault();
+      try { console.log('[main] before-quit — awaiting backend shutdown'); } catch (_) {}
+      await stopBackend();
+      app.quit();
+    }
+  });
+}

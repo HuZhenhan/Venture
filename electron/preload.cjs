@@ -8,6 +8,14 @@ contextBridge.exposeInMainWorld('desktopShell', {
   unmaximizeWindow: () => ipcRenderer.send('unmaximize-window'),
   isMaximized: () => ipcRenderer.invoke('is-maximized'),
   closeWindow: () => ipcRenderer.send('close-window'),
+  hideToTray: () => ipcRenderer.send('hide-to-tray'),
+  quitApp: () => ipcRenderer.send('quit-app'),
+  onCloseRequested: (callback) => {
+    if (typeof callback !== 'function') return () => {};
+    const listener = () => callback();
+    ipcRenderer.on('window-close-requested', listener);
+    return () => ipcRenderer.removeListener('window-close-requested', listener);
+  },
   getBackendInfo: () => ipcRenderer.invoke('get-backend-info'),
   browserOpen: (payload) => ipcRenderer.invoke('browser-open', payload),
   browserNavigate: (url) => ipcRenderer.invoke('browser-navigate', url),

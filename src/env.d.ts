@@ -51,6 +51,9 @@ interface DesktopShellApi {
   unmaximizeWindow: () => void;
   isMaximized: () => Promise<boolean>;
   closeWindow: () => void;
+  hideToTray: () => void;
+  quitApp: () => void;
+  onCloseRequested: (callback: () => void) => () => void;
   getBackendInfo: () => Promise<BackendInfo>;
   browserOpen: (payload: {
     url: string;
