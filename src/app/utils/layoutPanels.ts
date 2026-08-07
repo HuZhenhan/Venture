@@ -1,6 +1,6 @@
-export type WorkspaceView = 'chat' | 'browser' | 'workflow' | 'editor' | 'settings' | 'usage';
+export type WorkspaceView = 'chat' | 'browser' | 'workflow' | 'skills' | 'editor' | 'settings' | 'usage';
 export type SinglePagePanelView = WorkspaceView;
-export type ToggleablePanel = Exclude<WorkspaceView, 'chat' | 'browser' | 'workflow'>;
+export type ToggleablePanel = Exclude<WorkspaceView, 'chat' | 'browser' | 'workflow' | 'skills'>;
 
 export interface SinglePageSyncState {
   view: SinglePagePanelView;
@@ -13,6 +13,7 @@ export interface RailState {
   chatActive: boolean;
   browserActive: boolean;
   workflowActive: boolean;
+  skillsActive: boolean;
   editorActive: boolean;
   settingsActive: boolean;
   usageActive: boolean;
@@ -67,6 +68,8 @@ export function isWorkspaceViewOpen(view: WorkspaceView, state: WorkspaceOpenSta
       return state.isBrowserOpen;
     case 'workflow':
       return true;
+    case 'skills':
+      return true;
     case 'editor':
       return state.isEditorOpen;
     case 'settings':
@@ -101,6 +104,7 @@ export interface AdaptivePanelVisibility {
   showChat: boolean;
   showBrowser: boolean;
   showWorkflow: boolean;
+  showSkills: boolean;
   showSettings: boolean;
   showUsage: boolean;
   singlePageView: SinglePagePanelView;
@@ -122,6 +126,7 @@ export function resolveAdaptivePanelVisibility(args: AdaptivePanelVisibilityArgs
     showChat: !args.chatCollapsed || singlePageView === 'chat',
     showBrowser,
     showWorkflow: activeView === 'workflow',
+    showSkills: activeView === 'skills',
     showSettings: args.isSettingsOpen && (args.settingsParticipatesInLayout || singlePageView === 'settings'),
     showUsage: args.isUsageOpen && (args.usageParticipatesInLayout || singlePageView === 'usage'),
     singlePageView,
@@ -166,6 +171,7 @@ export function resolveSinglePageSyncState(args: {
 }): SinglePageSyncState {
   const currentViewState =
     args.singlePageView === 'workflow' ||
+    args.singlePageView === 'skills' ||
     (args.singlePageView === 'settings' && args.isSettingsOpen) ||
     (args.singlePageView === 'usage' && args.isUsageOpen) ||
     (args.singlePageView === 'browser' && args.isBrowserOpen) ||
@@ -233,6 +239,7 @@ export function resolveRailState(args: {
       chatActive: args.singlePageView === 'chat',
       browserActive: args.singlePageView === 'browser',
       workflowActive: args.singlePageView === 'workflow',
+      skillsActive: args.singlePageView === 'skills',
       editorActive: args.singlePageView === 'editor',
       settingsActive: args.singlePageView === 'settings',
       usageActive: args.singlePageView === 'usage',
@@ -240,9 +247,10 @@ export function resolveRailState(args: {
   }
 
   return {
-    chatActive: args.activeWorkspaceView === 'chat' || (args.activeWorkspaceView !== 'workflow' && !args.effectiveEditorOpen && !args.isSettingsOpen && !args.isUsageOpen && !args.isBrowserOpen),
+    chatActive: args.activeWorkspaceView === 'chat' || (args.activeWorkspaceView !== 'workflow' && args.activeWorkspaceView !== 'skills' && !args.effectiveEditorOpen && !args.isSettingsOpen && !args.isUsageOpen && !args.isBrowserOpen),
     browserActive: args.isBrowserOpen && (args.activeWorkspaceView === 'browser' || args.browserParticipatesInLayout),
     workflowActive: args.activeWorkspaceView === 'workflow',
+    skillsActive: args.activeWorkspaceView === 'skills',
     editorActive: args.effectiveEditorOpen,
     settingsActive: args.isSettingsOpen,
     usageActive: args.isUsageOpen,

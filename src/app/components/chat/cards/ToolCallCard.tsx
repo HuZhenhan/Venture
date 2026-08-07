@@ -13,13 +13,16 @@ import {
   Loader2,
   Pencil,
   RefreshCw,
+  ScrollText,
   Search,
   Eye,
   Wrench,
 } from 'lucide-react';
-import { ToolCall, ToolCallStatus } from '../../../types';
+import { SkillCall, ToolCall, ToolCallStatus } from '../../../types';
 import { APPLE_CURVE, CARD_EXPAND_TRANSITION, CARD_HEADER_TRANSITION } from '../../../constants';
 import { getToolCardClasses } from './toolCardStyles';
+import { ExpandableCard, StatusHeader } from './ExpandableCard';
+import { SkillCard } from './SkillCard';
 
 interface ToolCallCardProps {
   tool: ToolCall;
@@ -94,7 +97,121 @@ export function inputSummary(tool: ToolCall): string {
   }
 }
 
+/** list_skill 结构化结果。 */
+interface ListSkillStructured {
+  count?: number;
+  total?: number;
+  filter?: string | null;
+}
+
+/** load_skill 结构化结果（成功与错误共有的字段）。 */
+interface LoadSkillStructured {
+  name?: string;
+  code?: string;
+  description?: string;
+  truncated?: boolean;
+  status?: string;
+}
+
+const LOAD_SKILL_ERROR_LABELS: Record<string, string> = {
+  PERMISSION_ASK: '需要授权',
+  ERR_NOT_FOUND: '技能不存在',
+  ERR_NOT_AUTO_INVOCABLE: '不允许自动调用',
+  ERR_PERMISSION: '权限拒绝',
+};
+
+function skillCallStatus(status: ToolCallStatus): SkillCall['status'] {
+  if (status === 'completed') return 'completed';
+  if (status === 'failed') return 'failed';
+  return 'running';
+}
+
+/** list_skill 轻量卡片：只展示数量与筛选词，不展示完整技能列表。 */
+function ListSkillResultCard({ tool }: { tool: ToolCall }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const styles = getToolCardClasses(isExpanded);
+  const structured = (tool.structured ?? {}) as ListSkillStructured;
+  const statusKey = skillCallStatus(tool.status);
+
+  const iconClassName = 'text-muted-foreground';
+  const icon =
+    statusKey === 'running' ? (
+      <Loader2 size={12} className={`${iconClassName} animate-spin`} />
+    ) : statusKey === 'failed' ? (
+      <CircleAlert size={12} className="text-destructive" />
+    ) : (
+      <ScrollText size={12} className={iconClassName} />
+    );
+
+  const summaryText =
+    statusKey === 'failed'
+      ? '列出技能失败'
+      : typeof structured.count === 'number'
+        ? `发现 ${structured.count} 个技能`
+        : '列出技能';
+
+  return (
+    <ExpandableCard
+      expanded={isExpanded}
+      onExpandedChange={setIsExpanded}
+      icon={icon}
+      header={
+        <StatusHeader statusKey={statusKey}>
+          <span className={`${styles.eyebrow} font-normal whitespace-nowrap`}>列出技能</span>
+          <span className={`truncate ${styles.headerTitle}`}>{summaryText}</span>
+          {structured.filter ? (
+            <span className="truncate text-[12px] text-muted-foreground/80 font-mono">筛选：{structured.filter}</span>
+          ) : null}
+        </StatusHeader>
+      }
+    >
+      <div className="px-11 pb-5 pt-1">
+        <div className="space-y-1.5 text-[12px] text-muted-foreground">
+          {typeof structured.total === 'number' && (
+            <div>技能总数：{structured.total}</div>
+          )}
+          {structured.filter ? <div>筛选关键词：{structured.filter}</div> : null}
+          {tool.status === 'failed' && tool.output ? (
+            <pre className={styles.codeBlock}>{tool.output}</pre>
+          ) : null}
+        </div>
+      </div>
+    </ExpandableCard>
+  );
+}
+
+/** load_skill 卡片：复用 SkillCard 展示真实调用数据。 */
+function LoadSkillResultCard({ tool }: { tool: ToolCall }) {
+  const structured = (tool.structured ?? {}) as LoadSkillStructured;
+  const input = (tool.input ?? {}) as Record<string, unknown>;
+  const errorLabel = structured.code ? LOAD_SKILL_ERROR_LABELS[structured.code] : undefined;
+
+  const skill: SkillCall = {
+    id: tool.id,
+    name: structured.name ?? (typeof input.name === 'string' ? input.name : tool.name),
+    status: skillCallStatus(tool.status),
+    params: formatInput(tool.input),
+    output: errorLabel
+      ? `${errorLabel}${tool.output ? `\n${tool.output}` : ''}`
+      : tool.output,
+  };
+
+  return <SkillCard skill={skill} />;
+}
+
 export function ToolCallCard({ tool }: ToolCallCardProps) {
+  const normalizedName = tool.name.toLowerCase();
+  if (normalizedName === 'list_skill') {
+    return <ListSkillResultCard tool={tool} />;
+  }
+  if (normalizedName === 'load_skill') {
+    return <LoadSkillResultCard tool={tool} />;
+  }
+
+  return <GenericToolCallCard tool={tool} />;
+}
+
+function GenericToolCallCard({ tool }: ToolCallCardProps) {
   const [isExpanded, setIsExpanded] = useState(tool.status === 'running' || tool.status === 'failed');
   const styles = getToolCardClasses(isExpanded);
 

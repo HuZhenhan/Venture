@@ -4,6 +4,7 @@ import {
   Bug,
   ChevronDown,
   ChevronRight,
+  Download,
   PanelRightClose,
   PanelRightOpen,
   Trash2,
@@ -28,9 +29,6 @@ export const TraceView: React.FC = () => {
   const traceRecords = useChatStore((s) => s.traceRecords);
   const clearTraceRecords = useChatStore((s) => s.clearTraceRecords);
   const clearTraceRecordsOnly = useChatStore((s) => s.clearTraceRecordsOnly);
-  const chatTitle = useChatStore((s) =>
-    s.tracedChatId ? s.chats.find((c) => c.id === s.tracedChatId)?.title ?? null : null
-  );
 
   const [selectedRecordId, setSelectedRecordId] = useState<string | null>(null);
   const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({});
@@ -75,6 +73,35 @@ export const TraceView: React.FC = () => {
       return JSON.stringify(data, null, 2);
     } catch {
       return String(data);
+    }
+  };
+
+  /** 导出当前选中记录（按当前模式：前端→后端 / 后端→供应商）。 */
+  const handleExport = () => {
+    if (!selectedRecord) return;
+    const exportingUpstream = traceMode === "upstream" && hasUpstream;
+    const data = {
+      traceMode: exportingUpstream ? "upstream" : "frontend",
+      timestamp: new Date(selectedRecord.timestamp).toISOString(),
+      request: exportingUpstream
+        ? selectedRecord.upstream!.request
+        : selectedRecord.request,
+      response: exportingUpstream
+        ? selectedRecord.upstream!.response
+        : selectedRecord.response,
+    };
+    try {
+      const blob = new Blob([JSON.stringify(data, null, 2)], {
+        type: "application/json",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `venture-trace-${exportingUpstream ? "upstream" : "frontend"}-${selectedRecord.timestamp}.json`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.warn("导出 trace 失败", err);
     }
   };
 
@@ -154,13 +181,17 @@ export const TraceView: React.FC = () => {
               {traceRecords.length}
             </span>
           )}
-          {chatTitle && (
-            <span className="text-[10px] text-muted-foreground truncate ml-1 max-w-[80px]">
-              {chatTitle}
-            </span>
-          )}
         </div>
         <div className="flex items-center gap-1 shrink-0">
+          {selectedRecord && (
+            <button
+              onClick={handleExport}
+              className="flex items-center justify-center w-7 h-7 rounded-lg text-muted-foreground hover:bg-muted/50 hover:text-foreground transition-all"
+              title="导出当前记录（按当前模式）"
+            >
+              <Download size={13} strokeWidth={2} />
+            </button>
+          )}
           {traceRecords.length > 0 && (
             <button
               onClick={() => {

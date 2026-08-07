@@ -147,6 +147,7 @@ export type ComposerReferenceKind =
   | 'symbol'
   | 'rule'
   | 'problem'
+  | 'skill'
   | 'web';
 
 interface BaseComposerReference {
@@ -169,6 +170,8 @@ export interface ResourceComposerReference extends BaseComposerReference {
   chatId?: string;
   url?: string;
   resource?: UploadedResource;
+  /** 技能引用的 SKILL.md 原始全文（kind === 'skill' 时携带，随消息发送给模型）。 */
+  content?: string;
 }
 
 export type ComposerReference = CodeComposerReference | ResourceComposerReference;

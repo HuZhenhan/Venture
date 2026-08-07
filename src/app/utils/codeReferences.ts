@@ -43,6 +43,10 @@ export function getComposerReferenceSignature(reference: ComposerReference) {
     return `chat:${reference.chatId ?? reference.label}`;
   }
 
+  if (reference.kind === "skill") {
+    return `skill:${reference.label}`;
+  }
+
   return `${reference.kind}:${reference.filePath ?? reference.detail ?? reference.label}`;
 }
 
@@ -80,6 +84,17 @@ function serializeCodeReference(reference: CodeReference) {
 }
 
 function serializeResourceReference(reference: ResourceComposerReference) {
+  if (reference.kind === "skill") {
+    const segments = [`用户引用了技能：${reference.label}`];
+    if (reference.detail && reference.detail !== reference.label) {
+      segments.push(reference.detail);
+    }
+    if (reference.content) {
+      segments.push(`${reference.label}技能完整内容:`, reference.content);
+    }
+    return segments.join("\n");
+  }
+
   if (reference.resource) {
     const { resource } = reference;
     const segments = [
@@ -124,7 +139,10 @@ export function draftNodesToText(nodes: ComposerDraftNode[], references: Compose
   return nodes.map((node) => {
     if (node.type === "text") return node.text;
     const reference = referenceMap.get(node.referenceId);
-    return reference ? `【用户引用了${reference.kind === 'chat' ? '内容' : getReferenceTypeLabel(reference.kind)}：${reference.label}】` : "";
+    if (!reference) return "";
+    // 技能引用会在消息中携带完整内容，明确告知模型无需再通过工具加载
+    const contentNote = reference.kind === 'skill' ? '，完整内容已提供' : '';
+    return `【用户引用了${reference.kind === 'chat' ? '内容' : getReferenceTypeLabel(reference.kind)}：${reference.label}${contentNote}】`;
   }).join("").trim();
 }
 
@@ -146,6 +164,8 @@ export function getReferenceTypeLabel(kind: ComposerReference["kind"]) {
       return "规则";
     case "problem":
       return "问题";
+    case "skill":
+      return "技能";
     case "web":
       return "网页";
     default:

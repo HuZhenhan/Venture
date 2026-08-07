@@ -120,7 +120,8 @@ function UserTextWithReferencePills({
   const referenceByLabel = new Map(references.map((reference) => [reference.label, reference]));
   const segments: React.ReactNode[] = [];
   // 兼容旧格式【资源: x】与新格式【用户引用了内容：x】（冒号全角/半角）
-  const pattern = /【(?:资源|用户引用了[^】：:]*)[：:]([^】]+)】/g;
+  // label 后可能带"，完整内容已提供"等尾注，只捕获 label 本身
+  const pattern = /【(?:资源|用户引用了[^】：:]*)[：:]([^】，]+)(?:，[^】]*)?】/g;
   let cursor = 0;
   let match: RegExpExecArray | null;
 

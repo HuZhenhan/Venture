@@ -8,6 +8,7 @@ import {
   MessageSquareText,
   OctagonAlert,
   Scale,
+  ScrollText,
   X,
 } from "lucide-react";
 import { ComposerReference } from "../../../types";
@@ -40,6 +41,8 @@ function getReferenceIcon(reference: ComposerReference) {
       return Scale;
     case "problem":
       return OctagonAlert;
+    case "skill":
+      return ScrollText;
     case "web":
       return Globe;
     default:

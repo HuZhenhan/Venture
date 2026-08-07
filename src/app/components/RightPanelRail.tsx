@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from 'motion/react';
-import { MessageSquareText, Settings2, Activity, Globe, SlidersHorizontal, Key, HardDriveDownload, FileText, Workflow } from 'lucide-react';
+import { MessageSquareText, Settings2, Activity, Globe, SlidersHorizontal, Key, HardDriveDownload, FileText, Workflow, ScrollText } from 'lucide-react';
 import { APPLE_CURVE } from '../constants';
 import { type SettingsTab, useLayoutStore, selectActiveSettingsTab, selectSetActiveSettingsTab } from '../store/useLayoutStore';
 
@@ -11,12 +11,14 @@ interface RightPanelRailProps {
   isBrowserActive: boolean;
   isBrowserSummaryOpen: boolean;
   isWorkflowActive: boolean;
+  isSkillsActive: boolean;
   onShowChat: () => void;
   onToggleSettings: () => void;
   onToggleUsage: () => void;
   onToggleBrowser: () => void;
   onToggleBrowserSummary: () => void;
   onToggleWorkflow: () => void;
+  onToggleSkills: () => void;
 }
 
 interface RailButtonProps {
@@ -35,6 +37,7 @@ const SETTINGS_TABS: ReadonlyArray<{
   { id: 'basic', label: '基础', icon: SlidersHorizontal },
   { id: 'api', label: 'API', icon: Key },
   { id: 'migration', label: '迁移', icon: HardDriveDownload },
+  { id: 'skills', label: '技能', icon: ScrollText },
 ] as const;
 
 function RailButton({ isActive, label, onClick, controlsId, children }: RailButtonProps) {
@@ -75,12 +78,14 @@ export function RightPanelRail({
   isBrowserActive,
   isBrowserSummaryOpen,
   isWorkflowActive,
+  isSkillsActive,
   onShowChat,
   onToggleSettings,
   onToggleUsage,
   onToggleBrowser,
   onToggleBrowserSummary,
   onToggleWorkflow,
+  onToggleSkills,
 }: RightPanelRailProps) {
   const activeSettingsTab = useLayoutStore(selectActiveSettingsTab);
   const setActiveSettingsTab = useLayoutStore(selectSetActiveSettingsTab);
@@ -97,6 +102,9 @@ export function RightPanelRail({
         </RailButton>
         <RailButton isActive={isWorkflowActive} label={isWorkflowActive ? '收起工作流' : '打开工作流'} onClick={onToggleWorkflow}>
           <Workflow size={17} />
+        </RailButton>
+        <RailButton isActive={isSkillsActive} label={isSkillsActive ? '收起技能' : '打开技能'} onClick={onToggleSkills}>
+          <ScrollText size={17} />
         </RailButton>
       </div>
 

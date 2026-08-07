@@ -69,10 +69,12 @@ export interface ResponsiveLayout {
   effectiveEditorOpen: boolean;
   browserParticipatesInLayout: boolean;
   workflowParticipatesInLayout: boolean;
+  skillsParticipatesInLayout: boolean;
   settingsParticipatesInLayout: boolean;
   usageParticipatesInLayout: boolean;
   singlePageContentWidth: number;
   workflowWidth: number;
+  skillPanelWidth: number;
 }
 
 function areResponsiveLayoutsEqual(a: ResponsiveLayout, b: ResponsiveLayout) {
@@ -90,10 +92,12 @@ function areResponsiveLayoutsEqual(a: ResponsiveLayout, b: ResponsiveLayout) {
     a.effectiveEditorOpen === b.effectiveEditorOpen &&
     a.browserParticipatesInLayout === b.browserParticipatesInLayout &&
     a.workflowParticipatesInLayout === b.workflowParticipatesInLayout &&
+    a.skillsParticipatesInLayout === b.skillsParticipatesInLayout &&
     a.settingsParticipatesInLayout === b.settingsParticipatesInLayout &&
     a.usageParticipatesInLayout === b.usageParticipatesInLayout &&
     a.singlePageContentWidth === b.singlePageContentWidth &&
-    a.workflowWidth === b.workflowWidth
+    a.workflowWidth === b.workflowWidth &&
+    a.skillPanelWidth === b.skillPanelWidth
   );
 }
 
@@ -136,6 +140,7 @@ function deriveResponsiveLayout(state: LayoutComputationState): ResponsiveLayout
   const usableViewportWidth = Math.max(state.viewportWidth - reservedRightWidth, state.viewportWidth * 0.2);
   const browserParticipatesInLayout = !singlePageMode && state.isBrowserOpen && state.activeWorkspaceView === 'browser';
   const workflowParticipatesInLayout = !singlePageMode && state.activeWorkspaceView === 'workflow';
+  const skillsParticipatesInLayout = !singlePageMode && state.activeWorkspaceView === 'skills';
   const settingsParticipatesInLayout = !singlePageMode && state.isSettingsOpen && state.activeWorkspaceView === 'settings';
   const usageParticipatesInLayout = !singlePageMode && state.isUsageOpen && state.activeWorkspaceView === 'usage';
   const availableBesideSidebar = Math.max(
@@ -148,6 +153,9 @@ function deriveResponsiveLayout(state: LayoutComputationState): ResponsiveLayout
   const workflowWidth = workflowParticipatesInLayout
     ? panelWidthForAvailable(BROWSER_PANEL_WIDTH, MIN_BROWSER_WIDTH, availableBesideSidebar - 320)
     : 0;
+  const skillPanelWidth = skillsParticipatesInLayout
+    ? panelWidthForAvailable(BROWSER_PANEL_WIDTH, MIN_BROWSER_WIDTH, availableBesideSidebar - 320)
+    : 0;
   const settingsPanelWidth = settingsParticipatesInLayout || usageParticipatesInLayout
     ? panelWidthForAvailable(
         state.settingsWidth,
@@ -155,7 +163,7 @@ function deriveResponsiveLayout(state: LayoutComputationState): ResponsiveLayout
         availableBesideSidebar - 320
       )
     : 0;
-  const activeExtraPanelWidth = browserWidth + workflowWidth
+  const activeExtraPanelWidth = browserWidth + workflowWidth + skillPanelWidth
     + (settingsParticipatesInLayout ? settingsPanelWidth : 0)
     + (usageParticipatesInLayout ? settingsPanelWidth : 0);
   const availableForCore = usableViewportWidth - activeExtraPanelWidth;
@@ -212,10 +220,12 @@ function deriveResponsiveLayout(state: LayoutComputationState): ResponsiveLayout
     effectiveEditorOpen,
     browserParticipatesInLayout,
     workflowParticipatesInLayout,
+    skillsParticipatesInLayout,
     settingsParticipatesInLayout,
     usageParticipatesInLayout,
     singlePageContentWidth: Math.max(usableViewportWidth, 0),
     workflowWidth,
+    skillPanelWidth,
   };
 }
 
@@ -253,6 +263,7 @@ export const selectToggleSidebar = (state: LayoutState) => state.toggleSidebar;
 export const selectToggleBrowser = (state: LayoutState) => state.toggleBrowser;
 export const selectToggleBrowserSummary = (state: LayoutState) => state.toggleBrowserSummary;
 export const selectToggleWorkflow = (state: LayoutState) => state.toggleWorkflow;
+export const selectToggleSkills = (state: LayoutState) => state.toggleSkills;
 export const selectSyncPanelVisibility = (state: LayoutState) => state.syncPanelVisibility;
 export const selectShowChatPanel = (state: LayoutState) => state.showChatPanel;
 export const selectTogglePanel = (state: LayoutState) => state.togglePanel;
@@ -266,7 +277,7 @@ export const selectSetShowLayoutDebug = (state: LayoutState) => state.setShowLay
 
 const layoutCache: { value: ResponsiveLayout | null } = { value: null };
 
-export type SettingsTab = 'basic' | 'api' | 'migration';
+export type SettingsTab = 'basic' | 'api' | 'migration' | 'skills';
 
 interface LayoutState {
   showFpsOverlay: boolean;
@@ -314,6 +325,7 @@ interface LayoutState {
   toggleBrowser: () => void;
   toggleBrowserSummary: () => void;
   toggleWorkflow: () => void;
+  toggleSkills: () => void;
   clearActiveDiff: () => void;
   syncPanelVisibility: () => void;
   showChatPanel: () => void;
@@ -401,6 +413,16 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   toggleBrowserSummary: () => set((state) => ({ isBrowserSummaryOpen: !state.isBrowserSummaryOpen })),
   toggleWorkflow: () => set((state) => {
     const nextView: WorkspaceView = state.activeWorkspaceView === 'workflow' ? 'chat' : 'workflow';
+    return {
+      activeWorkspaceView: nextView,
+      singlePageView: nextView,
+      isEditorOpen: false,
+      isSettingsOpen: false,
+      isUsageOpen: false,
+    };
+  }),
+  toggleSkills: () => set((state) => {
+    const nextView: WorkspaceView = state.activeWorkspaceView === 'skills' ? 'chat' : 'skills';
     return {
       activeWorkspaceView: nextView,
       singlePageView: nextView,

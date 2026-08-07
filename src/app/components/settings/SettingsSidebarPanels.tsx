@@ -1,12 +1,14 @@
 import { AnimatePresence, motion } from 'motion/react';
 import { Check, ChevronDown, Edit2, Image, Loader2, Minus, Plus, Save, Shield, Trash2, X, Zap } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { APIConfig, AIModel } from '../../types';
 import type { LegacyLocalDataSummary } from '../../services/appDataService';
 import { useClickOutside } from '../../hooks/useClickOutside';
 import { APPLE_CURVE, DURATION } from '../../constants';
 import { addProvider, deleteProvider, updateProvider } from '../../services/modelConfigService';
 import { useChatStore } from '../../store/useChatStore';
+import { SkillPermission, SkillSettings } from '../../services/skillService';
+import { selectSkillSettings, selectSkillSettingsLoading, useSkillStore } from '../../store/useSkillStore';
 
 interface CustomSelectProps {
   value: string;
@@ -755,5 +757,317 @@ export function ProviderConfigModal({
         </div>
       ) : null}
     </AnimatePresence>
+  );
+}
+
+// ─── 技能设置 ────────────────────────────────────────────────────────────────
+
+function SkillSettingsSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-2">
+      <p className="px-1 text-[10px] font-bold uppercase tracking-[0.15em] text-muted-foreground">{title}</p>
+      <div className="divide-y divide-border rounded-2xl border border-border bg-background/50">{children}</div>
+    </div>
+  );
+}
+
+function SkillSettingsRow({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center justify-between gap-3 px-4 py-3">
+      <div className="space-y-0.5">
+        <p className="text-[12px] font-semibold text-foreground">{label}</p>
+        {hint ? <p className="text-[10px] text-muted-foreground">{hint}</p> : null}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function StringListEditor({
+  items,
+  placeholder,
+  onChange,
+}: {
+  items: string[];
+  placeholder: string;
+  onChange: (items: string[]) => void;
+}) {
+  const [draft, setDraft] = useState('');
+  return (
+    <div className="px-4 py-3">
+      <div className="space-y-1.5">
+        {items.map((item, index) => (
+          <div key={`${item}-${index}`} className="flex items-center gap-2 rounded-lg bg-muted/40 px-2 py-1">
+            <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground">{item}</span>
+            <button
+              type="button"
+              onClick={() => onChange(items.filter((_, i) => i !== index))}
+              className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              aria-label={`移除 ${item}`}
+            >
+              <X size={11} />
+            </button>
+          </div>
+        ))}
+      </div>
+      <div className="mt-2 flex items-center gap-2">
+        <input
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && draft.trim()) {
+              onChange([...items, draft.trim()]);
+              setDraft('');
+            }
+          }}
+          placeholder={placeholder}
+          className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground focus:border-foreground/30"
+        />
+        <button
+          type="button"
+          disabled={!draft.trim()}
+          onClick={() => {
+            onChange([...items, draft.trim()]);
+            setDraft('');
+          }}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+          aria-label="添加"
+        >
+          <Plus size={12} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SkillNumberInput({ value, onChange }: { value: number; onChange: (value: number) => void }) {
+  return (
+    <input
+      type="number"
+      value={Number.isFinite(value) ? value : 0}
+      onChange={(event) => {
+        const next = Number(event.target.value);
+        if (Number.isFinite(next)) onChange(next);
+      }}
+      className="w-24 rounded-lg border border-border bg-background px-2 py-1 text-right font-mono text-[11px] text-foreground outline-none focus:border-foreground/30"
+    />
+  );
+}
+
+export function SkillSettingsPanel() {
+  const settings = useSkillStore(selectSkillSettings);
+  const settingsLoading = useSkillStore(selectSkillSettingsLoading);
+  const loadSettings = useSkillStore((state) => state.loadSettings);
+  const saveSettings = useSkillStore((state) => state.saveSettings);
+  const [draft, setDraft] = useState<SkillSettings | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const [newRulePattern, setNewRulePattern] = useState('');
+  const [newRuleMode, setNewRuleMode] = useState<SkillPermission>('allow');
+
+  useEffect(() => {
+    void loadSettings();
+  }, [loadSettings]);
+
+  useEffect(() => {
+    if (settings) setDraft(settings.merged);
+  }, [settings]);
+
+  if (settingsLoading && !draft) {
+    return (
+      <div className="flex items-center justify-center gap-2 px-5 pt-10 text-[12px] text-muted-foreground">
+        <Loader2 size={13} className="animate-spin" />
+        正在加载技能设置…
+      </div>
+    );
+  }
+
+  if (!draft) {
+    return (
+      <div className="px-5 pt-10 text-center text-[12px] text-muted-foreground">
+        无法加载技能设置，请确认后端服务已启动。
+      </div>
+    );
+  }
+
+  const update = (recipe: (current: SkillSettings) => SkillSettings) => {
+    setDraft((current) => (current ? recipe(current) : current));
+    setStatus(null);
+  };
+
+  const handleSave = async () => {
+    if (!draft) return;
+    setSaving(true);
+    setStatus(null);
+    try {
+      await saveSettings(draft);
+      setStatus('已保存');
+    } catch (error) {
+      console.warn('Failed to save skill settings.', error);
+      setStatus('保存失败，请稍后重试');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const ruleEntries = Object.entries(draft.permission.skill);
+
+  return (
+    <div className="px-5 pt-5 pb-4 space-y-4 relative z-10 w-full shrink-0">
+      <SkillSettingsSection title="扫描根目录">
+        <StringListEditor
+          items={draft.roots.extra}
+          placeholder="额外扫描目录..."
+          onChange={(extra) => update((current) => ({ ...current, roots: { ...current.roots, extra } }))}
+        />
+        <SkillSettingsRow label="禁用默认用户目录" hint="不再扫描默认的用户级技能目录">
+          <AppleToggle
+            checked={draft.roots.disableDefaultUser}
+            onChange={() => update((current) => ({ ...current, roots: { ...current.roots, disableDefaultUser: !current.roots.disableDefaultUser } }))}
+          />
+        </SkillSettingsRow>
+        <div className="px-4 py-3">
+          <p className="text-[12px] font-semibold text-foreground">托管目录</p>
+          <input
+            value={draft.roots.managed ?? ''}
+            onChange={(event) => update((current) => ({
+              ...current,
+              roots: { ...current.roots, managed: event.target.value.trim() ? event.target.value : null },
+            }))}
+            placeholder="留空表示不启用"
+            className="mt-1.5 w-full rounded-lg border border-border bg-background px-2 py-1 font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground focus:border-foreground/30"
+          />
+        </div>
+      </SkillSettingsSection>
+
+      <SkillSettingsSection title="兼容模式">
+        {(['claude', 'agents', 'opencode', 'grok'] as const).map((key) => (
+          <SkillSettingsRow key={key} label={key.charAt(0).toUpperCase() + key.slice(1)}>
+            <AppleToggle
+              checked={draft.compat[key]}
+              onChange={() => update((current) => ({ ...current, compat: { ...current.compat, [key]: !current.compat[key] } }))}
+            />
+          </SkillSettingsRow>
+        ))}
+        <StringListEditor
+          items={draft.compat.skip}
+          placeholder="跳过的目录名..."
+          onChange={(skip) => update((current) => ({ ...current, compat: { ...current.compat, skip } }))}
+        />
+      </SkillSettingsSection>
+
+      <SkillSettingsSection title="权限">
+        <SkillSettingsRow label="默认模式" hint="未匹配规则时的默认权限">
+          <CustomSelect
+            value={draft.permission.defaultMode}
+            options={['allow', 'deny', 'ask']}
+            onChange={(value) => update((current) => ({ ...current, permission: { ...current.permission, defaultMode: value } }))}
+          />
+        </SkillSettingsRow>
+        <div className="px-4 py-3">
+          <p className="mb-2 text-[11px] font-semibold text-muted-foreground">技能规则</p>
+          <div className="space-y-1.5">
+            {ruleEntries.map(([pattern, mode]) => (
+              <div key={pattern} className="flex items-center gap-2 rounded-lg bg-muted/40 px-2 py-1">
+                <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground">{pattern}</span>
+                <CustomSelect
+                  value={mode}
+                  options={['allow', 'deny', 'ask']}
+                  onChange={(value) => update((current) => ({
+                    ...current,
+                    permission: { ...current.permission, skill: { ...current.permission.skill, [pattern]: value as SkillPermission } },
+                  }))}
+                />
+                <button
+                  type="button"
+                  onClick={() => update((current) => {
+                    const next = { ...current.permission.skill };
+                    delete next[pattern];
+                    return { ...current, permission: { ...current.permission, skill: next } };
+                  })}
+                  className="flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  aria-label={`删除规则 ${pattern}`}
+                >
+                  <Trash2 size={11} />
+                </button>
+              </div>
+            ))}
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            <input
+              value={newRulePattern}
+              onChange={(event) => setNewRulePattern(event.target.value)}
+              placeholder="技能名或匹配模式"
+              className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground focus:border-foreground/30"
+            />
+            <CustomSelect value={newRuleMode} options={['allow', 'deny', 'ask']} onChange={(value) => setNewRuleMode(value as SkillPermission)} />
+            <button
+              type="button"
+              disabled={!newRulePattern.trim()}
+              onClick={() => {
+                update((current) => ({
+                  ...current,
+                  permission: { ...current.permission, skill: { ...current.permission.skill, [newRulePattern.trim()]: newRuleMode } },
+                }));
+                setNewRulePattern('');
+              }}
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-muted/60 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+              aria-label="添加规则"
+            >
+              <Plus size={12} />
+            </button>
+          </div>
+        </div>
+      </SkillSettingsSection>
+
+      <SkillSettingsSection title="预算">
+        <SkillSettingsRow label="启用公告" hint="在系统提示中公告可用技能">
+          <AppleToggle
+            checked={draft.budget.announcementEnabled}
+            onChange={() => update((current) => ({ ...current, budget: { ...current.budget, announcementEnabled: !current.budget.announcementEnabled } }))}
+          />
+        </SkillSettingsRow>
+        <SkillSettingsRow label="公告占比 (%)">
+          <SkillNumberInput value={draft.budget.announcementPercent} onChange={(value) => update((current) => ({ ...current, budget: { ...current.budget, announcementPercent: value } }))} />
+        </SkillSettingsRow>
+        <SkillSettingsRow label="单条字符数">
+          <SkillNumberInput value={draft.budget.perEntryChars} onChange={(value) => update((current) => ({ ...current, budget: { ...current.budget, perEntryChars: value } }))} />
+        </SkillSettingsRow>
+        <SkillSettingsRow label="列表上限">
+          <SkillNumberInput value={draft.budget.listLimit} onChange={(value) => update((current) => ({ ...current, budget: { ...current.budget, listLimit: value } }))} />
+        </SkillSettingsRow>
+        <SkillSettingsRow label="最大注入字节">
+          <SkillNumberInput value={draft.budget.maxInjectBytes} onChange={(value) => update((current) => ({ ...current, budget: { ...current.budget, maxInjectBytes: value } }))} />
+        </SkillSettingsRow>
+        <SkillSettingsRow label="最大预载字节">
+          <SkillNumberInput value={draft.budget.maxPreloadBytes} onChange={(value) => update((current) => ({ ...current, budget: { ...current.budget, maxPreloadBytes: value } }))} />
+        </SkillSettingsRow>
+      </SkillSettingsSection>
+
+      <SkillSettingsSection title="日志">
+        <SkillSettingsRow label="日志级别">
+          <CustomSelect
+            value={draft.logging.level}
+            options={['error', 'warn', 'info', 'debug', 'trace']}
+            onChange={(value) => update((current) => ({ ...current, logging: { level: value } }))}
+          />
+        </SkillSettingsRow>
+      </SkillSettingsSection>
+
+      {status ? <p className="px-1 text-[11px] text-muted-foreground">{status}</p> : null}
+
+      <button
+        onClick={() => void handleSave()}
+        disabled={saving}
+        className={`relative z-0 flex w-full items-center justify-center gap-2.5 rounded-2xl py-4 text-[13px] font-bold transition-all ${
+          saving
+            ? 'cursor-not-allowed border border-border bg-muted/60 text-muted-foreground'
+            : 'border border-border bg-background text-foreground shadow-sm hover:bg-muted/50 active:scale-[0.98]'
+        }`}
+      >
+        {saving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+        {saving ? '保存中…' : '保存技能设置'}
+      </button>
+    </div>
   );
 }

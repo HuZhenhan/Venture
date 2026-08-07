@@ -7,8 +7,10 @@ import { SidebarToggleButton } from './SidebarToggleButton';
 import { RightPanelRail } from './RightPanelRail';
 import { BrowserPanel } from './BrowserPanel';
 import { WorkflowCanvas } from './WorkflowCanvas';
+import { SkillPanel } from './skills/SkillPanel';
 import { DesktopPanels, SinglePagePanels } from './layout/MainLayoutPanels';
 import { useChatStore } from '../store/useChatStore';
+import { selectSelectedSkillName, useSkillStore } from '../store/useSkillStore';
 import { 
   selectResponsiveLayout, 
   selectIsSidebarOpen,
@@ -26,6 +28,7 @@ import {
   selectToggleBrowser,
   selectToggleBrowserSummary,
   selectToggleWorkflow,
+  selectToggleSkills,
   selectSyncPanelVisibility,
   selectShowChatPanel,
   selectTogglePanel,
@@ -63,6 +66,7 @@ export function MainLayout() {
   const toggleBrowser = useLayoutStore(selectToggleBrowser);
   const toggleBrowserSummary = useLayoutStore(selectToggleBrowserSummary);
   const toggleWorkflow = useLayoutStore(selectToggleWorkflow);
+  const toggleSkills = useLayoutStore(selectToggleSkills);
   const syncPanelVisibility = useLayoutStore(selectSyncPanelVisibility);
   const showChatPanel = useLayoutStore(selectShowChatPanel);
   const togglePanel = useLayoutStore(selectTogglePanel);
@@ -148,6 +152,11 @@ export function MainLayout() {
   });
   const showDockedBrowser = !singlePageMode && adaptiveVisibility.showBrowser;
   const showDockedWorkflow = !singlePageMode && adaptiveVisibility.showWorkflow;
+  const showDockedSkills = !singlePageMode && adaptiveVisibility.showSkills;
+  // skill 详情/编辑态：面板扩展占满对话区域（chat 隐藏但保持挂载），列表态恢复原样
+  const selectedSkillName = useSkillStore(selectSelectedSkillName);
+  const isSkillDetailOpen = showDockedSkills && !!selectedSkillName;
+  const skillDetailWidth = responsiveWidths.chatWidth + responsiveWidths.skillPanelWidth;
 
   const toggleSettings = useCallback(() => togglePanel('settings'), [togglePanel]);
   const toggleUsage = useCallback(() => togglePanel('usage'), [togglePanel]);
@@ -155,6 +164,7 @@ export function MainLayout() {
   const handleToggleBrowser = useCallback(() => toggleBrowser(), [toggleBrowser]);
   const handleToggleBrowserSummary = useCallback(() => toggleBrowserSummary(), [toggleBrowserSummary]);
   const handleToggleWorkflow = useCallback(() => toggleWorkflow(), [toggleWorkflow]);
+  const handleToggleSkills = useCallback(() => toggleSkills(), [toggleSkills]);
 
   // ── Lazy panel mounting ──────────────────────────────────────────────────────
   // Panels that have never been opened are NOT mounted in the DOM, saving initial
@@ -239,11 +249,11 @@ export function MainLayout() {
             <motion.main
               initial={false}
               animate={{
-                width: adaptiveVisibility.showChat ? responsiveWidths.chatWidth : 0,
-                opacity: adaptiveVisibility.showChat ? 1 : 0,
+                width: adaptiveVisibility.showChat && !isSkillDetailOpen ? responsiveWidths.chatWidth : 0,
+                opacity: adaptiveVisibility.showChat && !isSkillDetailOpen ? 1 : 0,
               }}
               transition={PANEL_TRANSITION}
-              className={`shrink-0 flex flex-col relative min-w-0 bg-background z-10 overflow-hidden ${adaptiveVisibility.showChat ? '' : 'pointer-events-none'}`}
+              className={`shrink-0 flex flex-col relative min-w-0 bg-background z-10 overflow-hidden ${adaptiveVisibility.showChat && !isSkillDetailOpen ? '' : 'pointer-events-none'}`}
             >
               <ChatArea />
             </motion.main>
@@ -270,6 +280,16 @@ export function MainLayout() {
               className={`shrink-0 flex h-full overflow-hidden ${showDockedWorkflow ? 'border-l border-border' : 'pointer-events-none'}`}
             >
               <WorkflowCanvas />
+            </motion.div>
+
+            {/* 技能面板：与对话区域同级平铺；详情/编辑态扩展占满对话区域 */}
+            <motion.div
+              initial={false}
+              animate={{ width: showDockedSkills ? (isSkillDetailOpen ? skillDetailWidth : responsiveWidths.skillPanelWidth) : 0, opacity: showDockedSkills ? 1 : 0 }}
+              transition={PANEL_TRANSITION}
+              className={`shrink-0 flex h-full overflow-hidden ${showDockedSkills ? 'border-l border-border' : 'pointer-events-none'}`}
+            >
+              <SkillPanel />
             </motion.div>
 
             {/* 小屏幕下的遮罩层 (与左侧栏对齐的逻辑) */}
@@ -332,12 +352,14 @@ export function MainLayout() {
                 isBrowserActive={railState.browserActive}
                 isBrowserSummaryOpen={isBrowserSummaryOpen}
                 isWorkflowActive={railState.workflowActive}
+                isSkillsActive={railState.skillsActive}
                 onShowChat={showChat}
                 onToggleSettings={toggleSettings}
                 onToggleUsage={toggleUsage}
                 onToggleBrowser={handleToggleBrowser}
                 onToggleBrowserSummary={handleToggleBrowserSummary}
                 onToggleWorkflow={handleToggleWorkflow}
+                onToggleSkills={handleToggleSkills}
               />
             </div>
           </div>

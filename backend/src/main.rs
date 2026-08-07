@@ -5,6 +5,7 @@ mod error;
 mod file_history;
 mod provider;
 mod chat;
+mod skill;
 mod task_store;
 mod tools;
 
@@ -41,6 +42,7 @@ pub(crate) struct AppState {
     pub(crate) task_store: Arc<TaskStore>,
     pub(crate) read_tracker: Arc<tools::ReadTracker>,
     pub(crate) file_history: Arc<file_history::FileHistory>,
+    pub(crate) skill_service: Arc<skill::SkillService>,
     /// 启动时生成的一次性 nonce，供 Electron 主进程校验后端身份
     startup_nonce: String,
 }
@@ -226,7 +228,7 @@ async fn chat_stream(
         max_tokens: body.max_tokens,
         trace_upstream: body.trace_upstream,
     };
-    chat::handle_stream(s.store.clone(), s.http.clone(), req).await
+    chat::handle_stream(s.store.clone(), s.http.clone(), req, Some(s.skill_service.clone())).await
 }
 
 // ─── 工具调用与任务管理路由处理器 ──────────────────────────────────────────
@@ -245,9 +247,147 @@ async fn execute_tool_handler(
         s.read_tracker.as_ref(),
         s.file_history.as_ref(),
         body.turn_message_id.as_deref(),
+        Some(s.skill_service.as_ref()),
     )
     .await?;
     Ok(Json(result))
+}
+
+// ─── Skill 系统 API（规格书 §2/§10.1）────────────────────────────────────
+
+/// 管理页列表：skills + shadowed + errors + 平台能力（时机 A：进入页面时增量扫描）
+async fn list_skills_handler(State(s): State<AppState>) -> Json<Value> {
+    Json(s.skill_service.ui_snapshot().await)
+}
+
+/// 手动刷新（管理页“刷新”按钮 / Android 下拉刷新）
+async fn refresh_skills_handler(State(s): State<AppState>) -> Json<Value> {
+    let changed = s.skill_service.discover().await;
+    Json(json!({ "changed": changed }))
+}
+
+/// 新建 skill（写入全局层）
+async fn create_skill_handler(
+    State(s): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, AppError> {
+    let info = s
+        .skill_service
+        .create_skill(&body)
+        .await
+        .map_err(AppError::ToolExecutionError)?;
+    Ok(Json(json!({ "skill": info })))
+}
+
+/// 引用内容端点（§10.1）：返回 SKILL.md 原文（原样，不做变量替换）
+async fn skill_content_handler(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    match s.skill_service.build_reference_injection(&name).await {
+        Ok(content) => Ok(Json(json!({ "name": name, "content": content }))),
+        Err(candidates) => Err(AppError::ToolExecutionError(format!(
+            "ERR_NOT_FOUND: skill「{name}」不存在。候选：{}",
+            candidates.join(", ")
+        ))),
+    }
+}
+
+/// 详情页文件树（§2）
+async fn skill_files_handler(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    let tree = s
+        .skill_service
+        .skill_files(&name)
+        .await
+        .map_err(AppError::ToolExecutionError)?;
+    Ok(Json(json!({ "tree": tree })))
+}
+
+#[derive(Debug, Deserialize)]
+struct SkillFileQuery {
+    path: String,
+}
+
+/// 详情页文件树中读取单个资源文件
+async fn skill_file_content_handler(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+    Query(q): Query<SkillFileQuery>,
+) -> Result<Json<Value>, AppError> {
+    let content = s
+        .skill_service
+        .skill_file_content(&name, &q.path)
+        .await
+        .map_err(AppError::ToolExecutionError)?;
+    Ok(Json(json!({ "content": content })))
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateSkillRequest {
+    content: String,
+}
+
+/// 更新 SKILL.md 原文（编辑）
+async fn update_skill_handler(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<UpdateSkillRequest>,
+) -> Result<Json<Value>, AppError> {
+    s.skill_service
+        .update_skill_content(&name, &body.content)
+        .await
+        .map_err(AppError::ToolExecutionError)?;
+    Ok(Json(json!({ "success": true })))
+}
+
+/// 删除 skill（前端已做二次确认）
+async fn delete_skill_handler(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+) -> Result<Json<Value>, AppError> {
+    s.skill_service
+        .delete_skill(&name)
+        .await
+        .map_err(AppError::ToolExecutionError)?;
+    Ok(Json(json!({ "success": true })))
+}
+
+#[derive(Debug, Deserialize)]
+struct SetSkillEnabledRequest {
+    enabled: bool,
+}
+
+/// 启用/禁用开关
+async fn set_skill_enabled_handler(
+    State(s): State<AppState>,
+    Path(name): Path<String>,
+    Json(body): Json<SetSkillEnabledRequest>,
+) -> Result<Json<Value>, AppError> {
+    s.skill_service
+        .set_enabled(&name, body.enabled)
+        .await
+        .map_err(AppError::ToolExecutionError)?;
+    Ok(Json(json!({ "success": true })))
+}
+
+/// 读取 skill settings（设置页）
+async fn get_skill_settings_handler(State(s): State<AppState>) -> Json<Value> {
+    Json(s.skill_service.get_settings().await)
+}
+
+/// 覆盖写全局 skill settings（设置页保存）
+async fn update_skill_settings_handler(
+    State(s): State<AppState>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, AppError> {
+    s.skill_service
+        .update_global_settings(body)
+        .await
+        .map_err(AppError::ToolExecutionError)?;
+    Ok(Json(json!({ "success": true })))
 }
 
 async fn list_tasks(
@@ -491,7 +631,16 @@ async fn main() -> anyhow::Result<()> {
     );
 
     let startup_nonce = generate_nonce();
-    let state = AppState { store, app_data, http, task_store, read_tracker, file_history, startup_nonce };
+
+    // Skill 系统（规格书 §3.1）：桌面端含项目层扫描
+    let skill_service = skill::SkillService::new(
+        skill::Platform::Desktop,
+        config::app_data_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        workspace_root(),
+    )
+    .await;
+
+    let state = AppState { store, app_data, http, task_store, read_tracker, file_history, skill_service, startup_nonce };
 
     // CORS：仅允许本地/tauri 来源，且方法/头只允许必需的
     let cors = CorsLayer::new()
@@ -546,6 +695,18 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/files/sync-out", post(sync_out_handler))
         .route("/api/files/sync-status", get(sync_status_handler))
         .route("/api/files/gc", post(run_gc_handler))
+        // Skill 系统（规格书 §2/§10.1）：管理 CRUD / 引用内容 / 文件树 / settings
+        .route("/api/skills", get(list_skills_handler).post(create_skill_handler))
+        .route("/api/skills/refresh", post(refresh_skills_handler))
+        .route("/api/skills/settings", get(get_skill_settings_handler).put(update_skill_settings_handler))
+        .route("/api/skills/:name/content", get(skill_content_handler))
+        .route("/api/skills/:name/files", get(skill_files_handler))
+        .route("/api/skills/:name/file", get(skill_file_content_handler))
+        .route("/api/skills/:name/enabled", post(set_skill_enabled_handler))
+        .route(
+            "/api/skills/:name",
+            axum::routing::put(update_skill_handler).delete(delete_skill_handler),
+        )
         .layer(DefaultBodyLimit::max(REQUEST_BODY_LIMIT))
         .layer(cors)
         .with_state(state);

@@ -23,6 +23,7 @@ use tokio::sync::RwLock;
 use walkdir::WalkDir;
 
 use crate::error::AppError;
+use crate::skill::SkillService;
 use crate::file_history::{
     self, ChangeKind, ChangeRecord, ChangeSource, FileHistory, FileMeta, MessageId, RecordId,
     TurnId, VersionId, bytes_to_hex, now_millis,
@@ -162,7 +163,19 @@ pub async fn execute_tool(
     read_tracker: &ReadTracker,
     file_history: Option<&FileHistory>,
     turn_message_id: Option<&str>,
+    skill_service: Option<&SkillService>,
 ) -> Result<ToolOutput, AppError> {
+    // 记录被访问路径（§11.2：paths 条件激活的输入之一）
+    if let Some(svc) = skill_service {
+        if matches!(tool, "Read" | "Write" | "Edit") {
+            if let Some(p) = input.get("file_path").and_then(Value::as_str) {
+                let resolved = resolve_path(p, workspace_root)
+                    .map(|r| r.to_string_lossy().into_owned())
+                    .unwrap_or_else(|_| p.to_string());
+                svc.record_access(&resolved).await;
+            }
+        }
+    }
     match tool {
         "Write" => execute_write(input, workspace_root, file_history, turn_message_id).await,
         "Edit" => execute_edit(input, workspace_root, chat_id, read_tracker, file_history, turn_message_id).await,
@@ -174,10 +187,52 @@ pub async fn execute_tool(
         "TaskUpdate" => execute_task_update(input, chat_id, task_store).await,
         "TaskList" => execute_task_list(input, chat_id, task_store).await,
         "TaskGet" => execute_task_get(input, chat_id, task_store).await,
+        "list_skill" => execute_list_skill(input, skill_service).await,
+        "load_skill" => execute_load_skill(input, skill_service).await,
         other => Err(AppError::ToolExecutionError(format!(
             "未知工具：{other}"
         ))),
     }
+}
+
+// ─── Skill 工具（规格书 §8）──────────────────────────────────────────────
+
+/// list_skill：模型自主发现技能（§8.1）。
+async fn execute_list_skill(
+    input: &Value,
+    skill_service: Option<&SkillService>,
+) -> Result<ToolOutput, AppError> {
+    let Some(svc) = skill_service else {
+        return Ok(ToolOutput::err("skill 服务不可用".into()));
+    };
+    let filter = input.get("filter").and_then(Value::as_str);
+    let r = svc.tool_list_skill(filter).await;
+    Ok(ToolOutput {
+        output: r.output,
+        is_error: r.is_error,
+        structured: Some(r.structured),
+    })
+}
+
+/// load_skill：加载技能完整指令（§8.2 状态机）。
+async fn execute_load_skill(
+    input: &Value,
+    skill_service: Option<&SkillService>,
+) -> Result<ToolOutput, AppError> {
+    let Some(svc) = skill_service else {
+        return Ok(ToolOutput::err("skill 服务不可用".into()));
+    };
+    let name = input
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::ToolExecutionError("name 参数缺失".into()))?;
+    let user_decision = input.get("userDecision").and_then(Value::as_str);
+    let r = svc.tool_load_skill(name, user_decision).await;
+    Ok(ToolOutput {
+        output: r.output,
+        is_error: r.is_error,
+        structured: Some(r.structured),
+    })
 }
 
 // ─── 文件系统工具 ─────────────────────────────────────────────────────────
@@ -1027,8 +1082,9 @@ pub async fn execute_and_serialize(
     read_tracker: &ReadTracker,
     file_history: &FileHistory,
     turn_message_id: Option<&str>,
+    skill_service: Option<&SkillService>,
 ) -> Result<Value, AppError> {
-    let result = execute_tool(tool, input, chat_id, task_store, workspace_root, read_tracker, Some(file_history), turn_message_id).await?;
+    let result = execute_tool(tool, input, chat_id, task_store, workspace_root, read_tracker, Some(file_history), turn_message_id, skill_service).await?;
     let output = truncate(result.output);
     Ok(json!({
         "output": output,
@@ -1277,6 +1333,42 @@ pub fn get_tools_schema() -> Vec<ToolDefinition> {
                     }
                 },
                 "required": ["taskId"],
+                "additionalProperties": false
+            }),
+        ),
+        // ── Skill 工具（规格书 §8）──
+        task_tool(
+            "list_skill",
+            "List available skills that match the optional filter. Then use load_skill to load a skill's full instructions before acting on it.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "filter": {
+                        "type": "string",
+                        "description": "Optional keyword; matched against skill name, description and when-to-use"
+                    }
+                },
+                "required": [],
+                "additionalProperties": false
+            }),
+        ),
+        task_tool(
+            "load_skill",
+            "Load the full instructions of a skill listed by list_skill. The skill content will be injected into the conversation. If the result is PERMISSION_ASK, call AskUserQuestion first, then retry with userDecision.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "The name of the skill from list_skill output"
+                    },
+                    "userDecision": {
+                        "type": "string",
+                        "enum": ["allow", "deny", "always_allow", "always_deny"],
+                        "description": "Only after a PERMISSION_ASK response and the user's AskUserQuestion answer: pass their decision here"
+                    }
+                },
+                "required": ["name"],
                 "additionalProperties": false
             }),
         ),
