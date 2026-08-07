@@ -43,6 +43,9 @@ similar = { version = "2", features = ["text"] }
 chrono = { version = "0.4", features = ["serde"] }
 once_cell = "1"
 flate2 = "1"
+# Skill 系统：YAML frontmatter 解析 / zip 技能包导入导出
+yaml-rust2 = "0.8"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 tempfile = "3"

@@ -111,6 +111,12 @@ export function ChatInput({ inputAreaRef, onMessageSent }: ChatInputProps = {}) 
       return;
     }
 
+    if (reference.kind === "skill") {
+      const layout = useLayoutStore.getState();
+      if (layout.activeWorkspaceView !== "skills") layout.toggleSkills();
+      return;
+    }
+
     if (reference.diffId) {
       openDiffAction(reference.diffId);
       return;

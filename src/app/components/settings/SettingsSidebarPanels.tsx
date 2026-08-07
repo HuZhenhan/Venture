@@ -1,12 +1,14 @@
 import { AnimatePresence, motion } from 'motion/react';
 import { Check, ChevronDown, Edit2, Image, Loader2, Minus, Plus, Save, Shield, Trash2, X, Zap } from 'lucide-react';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { APIConfig, AIModel } from '../../types';
 import type { LegacyLocalDataSummary } from '../../services/appDataService';
+import type { SkillPermission, SkillSettings } from '../../services/skillService';
 import { useClickOutside } from '../../hooks/useClickOutside';
 import { APPLE_CURVE, DURATION } from '../../constants';
 import { addProvider, deleteProvider, updateProvider } from '../../services/modelConfigService';
 import { useChatStore } from '../../store/useChatStore';
+import { useSkillStore } from '../../store/useSkillStore';
 
 interface CustomSelectProps {
   value: string;
@@ -755,5 +757,291 @@ export function ProviderConfigModal({
         </div>
       ) : null}
     </AnimatePresence>
+  );
+}
+
+const PERMISSION_LABELS: Record<SkillPermission, string> = {
+  allow: '允许',
+  ask: '询问',
+  deny: '拒绝',
+};
+
+const BUDGET_FIELDS: Array<{ key: Exclude<keyof SkillSettings['budget'], 'announcementEnabled'>; label: string; hint: string }> = [
+  { key: 'announcementPercent', label: '公告占用百分比', hint: '技能公告占上下文预算的百分比' },
+  { key: 'perEntryChars', label: '单条最大字符', hint: '列表中每个技能条目的最大字符数' },
+  { key: 'listLimit', label: '列表条数上限', hint: '技能公告最多列出的技能数量' },
+  { key: 'androidMaxTokens', label: '安卓最大 Token', hint: '安卓端注入技能内容的最大 token 数' },
+  { key: 'maxInjectBytes', label: '最大注入字节', hint: '注入技能内容的最大字节数' },
+  { key: 'maxPreloadBytes', label: '最大预载字节', hint: '预载技能内容的最大字节数' },
+];
+
+/** 技能设置面板（设置页 skills 标签）：根目录 / 权限规则 / 注入预算 */
+export function SkillSettingsPanel() {
+  const settings = useSkillStore((s) => s.settings);
+  const skillxDir = useSkillStore((s) => s.skillxDir);
+  const settingsLoading = useSkillStore((s) => s.settingsLoading);
+  const settingsSaving = useSkillStore((s) => s.settingsSaving);
+  const settingsError = useSkillStore((s) => s.settingsError);
+  const loadSettings = useSkillStore((s) => s.loadSettings);
+  const saveSettings = useSkillStore((s) => s.saveSettings);
+
+  const [draft, setDraft] = useState<SkillSettings | null>(null);
+  const [newRoot, setNewRoot] = useState('');
+  const [newPattern, setNewPattern] = useState('');
+  const [newPatternMode, setNewPatternMode] = useState<SkillPermission>('allow');
+
+  useEffect(() => {
+    void loadSettings();
+  }, [loadSettings]);
+
+  useEffect(() => {
+    if (settings) setDraft(settings);
+  }, [settings]);
+
+  if (settingsLoading && !draft) {
+    return (
+      <div className="px-5 pt-5 pb-4 relative z-10 w-full shrink-0">
+        <div className="flex items-center justify-center gap-2 py-10 text-muted-foreground">
+          <Loader2 size={14} className="animate-spin" />
+          <span className="text-[12px]">加载技能设置…</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!draft) {
+    return (
+      <div className="px-5 pt-5 pb-4 relative z-10 w-full shrink-0">
+        <div className="rounded-2xl border border-red-500/20 bg-red-500/[0.06] p-4 text-[12px] text-red-500">
+          {settingsError ?? '技能设置加载失败'}
+        </div>
+      </div>
+    );
+  }
+
+  const updateDraft = (updater: (prev: SkillSettings) => SkillSettings) => {
+    setDraft((prev) => (prev ? updater(prev) : prev));
+  };
+
+  const permissionEntries = Object.entries(draft.permission.skill);
+  const permissionOptions = Object.values(PERMISSION_LABELS);
+  const resolvePermissionLabel = (label: string): SkillPermission | undefined =>
+    (Object.keys(PERMISSION_LABELS) as SkillPermission[]).find(
+      (key) => PERMISSION_LABELS[key] === label,
+    );
+
+  return (
+    <div className="px-5 pt-5 pb-4 space-y-4 relative z-10 w-full shrink-0">
+      {skillxDir && (
+        <p className="text-[11px] text-muted-foreground font-mono break-all">技能目录：{skillxDir}</p>
+      )}
+
+      {/* 额外扫描根目录 */}
+      <div className="rounded-2xl border border-border bg-background/50 p-4 space-y-2.5">
+        <div className="space-y-0.5">
+          <p className="text-[13px] font-semibold text-foreground">额外扫描根目录</p>
+          <p className="text-[11px] text-muted-foreground">除默认目录外，额外扫描技能的位置</p>
+        </div>
+        {draft.roots.extra.map((root, index) => (
+          <div key={`${root}-${index}`} className="flex items-center gap-2">
+            <span className="min-w-0 flex-1 truncate rounded-xl border border-border bg-muted/40 px-3 py-2 font-mono text-[11px] text-foreground">
+              {root}
+            </span>
+            <button
+              type="button"
+              onClick={() =>
+                updateDraft((prev) => ({
+                  ...prev,
+                  roots: { ...prev.roots, extra: prev.roots.extra.filter((_, i) => i !== index) },
+                }))
+              }
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-500"
+              aria-label="删除该目录"
+            >
+              <Trash2 size={13} />
+            </button>
+          </div>
+        ))}
+        <div className="flex items-center gap-2">
+          <input
+            value={newRoot}
+            onChange={(e) => setNewRoot(e.target.value)}
+            placeholder="/path/to/skills"
+            className="min-w-0 flex-1 rounded-xl border border-border bg-muted/40 px-3 py-2 font-mono text-[11px] text-foreground outline-none focus:border-foreground/30"
+          />
+          <button
+            type="button"
+            onClick={() => {
+              const value = newRoot.trim();
+              if (!value) return;
+              updateDraft((prev) => ({ ...prev, roots: { ...prev.roots, extra: [...prev.roots.extra, value] } }));
+              setNewRoot('');
+            }}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+            aria-label="添加目录"
+          >
+            <Plus size={13} />
+          </button>
+        </div>
+      </div>
+
+      {/* 权限规则 */}
+      <div className="rounded-2xl border border-border bg-background/50 p-4 space-y-2.5">
+        <div className="flex items-center justify-between">
+          <div className="space-y-0.5">
+            <p className="text-[13px] font-semibold text-foreground">权限规则</p>
+            <p className="text-[11px] text-muted-foreground">按技能名模式匹配，控制调用权限</p>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] text-muted-foreground">默认</span>
+            <CustomSelect
+              value={PERMISSION_LABELS[draft.permission.defaultMode]}
+              options={permissionOptions}
+              onChange={(label) => {
+                const mode = resolvePermissionLabel(label);
+                if (mode) {
+                  updateDraft((prev) => ({
+                    ...prev,
+                    permission: { ...prev.permission, defaultMode: mode },
+                  }));
+                }
+              }}
+            />
+          </div>
+        </div>
+        {permissionEntries.map(([pattern, mode]) => (
+          <div key={pattern} className="flex items-center gap-2">
+            <span className="min-w-0 flex-1 truncate rounded-xl border border-border bg-muted/40 px-3 py-2 font-mono text-[11px] text-foreground">
+              {pattern}
+            </span>
+            <CustomSelect
+              value={PERMISSION_LABELS[mode as SkillPermission] ?? mode}
+              options={permissionOptions}
+              onChange={(label) => {
+                const nextMode = resolvePermissionLabel(label);
+                if (nextMode) {
+                  updateDraft((prev) => ({
+                    ...prev,
+                    permission: {
+                      ...prev.permission,
+                      skill: { ...prev.permission.skill, [pattern]: nextMode },
+                    },
+                  }));
+                }
+              }}
+            />
+            <button
+              type="button"
+              onClick={() =>
+                updateDraft((prev) => {
+                  const skill = { ...prev.permission.skill };
+                  delete skill[pattern];
+                  return { ...prev, permission: { ...prev.permission, skill } };
+                })
+              }
+              className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-red-500/10 hover:text-red-500"
+              aria-label="删除该规则"
+            >
+              <Trash2 size={13} />
+            </button>
+          </div>
+        ))}
+        <div className="flex items-center gap-2">
+          <input
+            value={newPattern}
+            onChange={(e) => setNewPattern(e.target.value)}
+            placeholder="技能名模式，如 web-*"
+            className="min-w-0 flex-1 rounded-xl border border-border bg-muted/40 px-3 py-2 font-mono text-[11px] text-foreground outline-none focus:border-foreground/30"
+          />
+          <CustomSelect
+            value={PERMISSION_LABELS[newPatternMode]}
+            options={permissionOptions}
+            onChange={(label) => {
+              const mode = resolvePermissionLabel(label);
+              if (mode) setNewPatternMode(mode);
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => {
+              const value = newPattern.trim();
+              if (!value) return;
+              updateDraft((prev) => ({
+                ...prev,
+                permission: {
+                  ...prev.permission,
+                  skill: { ...prev.permission.skill, [value]: newPatternMode },
+                },
+              }));
+              setNewPattern('');
+            }}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg border border-border text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+            aria-label="添加规则"
+          >
+            <Plus size={13} />
+          </button>
+        </div>
+      </div>
+
+      {/* 注入预算 */}
+      <div className="rounded-2xl border border-border bg-background/50 p-4 space-y-2.5">
+        <div className="space-y-0.5">
+          <p className="text-[13px] font-semibold text-foreground">注入预算</p>
+          <p className="text-[11px] text-muted-foreground">控制技能公告与内容注入的大小上限</p>
+        </div>
+        <div className="flex items-center justify-between">
+          <div className="space-y-0.5 pr-4">
+            <p className="text-[12px] font-medium text-foreground">技能公告</p>
+            <p className="text-[11px] text-muted-foreground">在对话中向模型公告可用技能列表</p>
+          </div>
+          <AppleToggle
+            checked={draft.budget.announcementEnabled}
+            onChange={() =>
+              updateDraft((prev) => ({
+                ...prev,
+                budget: { ...prev.budget, announcementEnabled: !prev.budget.announcementEnabled },
+              }))
+            }
+            size="sm"
+          />
+        </div>
+        {BUDGET_FIELDS.map((field) => (
+          <div key={field.key} className="flex items-center justify-between gap-3">
+            <div className="space-y-0.5 min-w-0">
+              <p className="text-[12px] font-medium text-foreground">{field.label}</p>
+              <p className="text-[11px] text-muted-foreground truncate">{field.hint}</p>
+            </div>
+            <input
+              type="number"
+              value={draft.budget[field.key]}
+              onChange={(e) => {
+                const value = Number(e.target.value);
+                if (Number.isNaN(value)) return;
+                updateDraft((prev) => ({
+                  ...prev,
+                  budget: { ...prev.budget, [field.key]: value },
+                }));
+              }}
+              className="w-24 shrink-0 rounded-xl border border-border bg-muted/40 px-3 py-2 text-right font-mono text-[11px] text-foreground outline-none focus:border-foreground/30"
+            />
+          </div>
+        ))}
+      </div>
+
+      {settingsError && (
+        <div className="rounded-2xl border border-red-500/20 bg-red-500/[0.06] px-4 py-3 text-[12px] text-red-500">
+          {settingsError}
+        </div>
+      )}
+
+      <button
+        onClick={() => void saveSettings(draft).catch(() => undefined)}
+        disabled={settingsSaving}
+        className="relative z-0 flex w-full items-center justify-center gap-2.5 rounded-2xl border border-border bg-background py-4 text-[13px] font-bold text-foreground shadow-sm transition-all hover:bg-muted/50 active:scale-[0.98] disabled:opacity-60"
+      >
+        {settingsSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+        {settingsSaving ? '保存中...' : '保存技能设置'}
+      </button>
+    </div>
   );
 }

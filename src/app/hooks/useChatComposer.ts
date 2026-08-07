@@ -5,10 +5,10 @@ import { useGeneration } from './useGeneration';
 import { ComposerDraftNode, ComposerReference, InsertChatPayload } from '../types';
 import {
   buildComposerBlocks,
+  draftNodesToText,
   getComposerTitle,
   INSERT_CHAT_EVENT,
   mergeComposerReferences,
-  serializeComposerMessage,
 } from '../utils/codeReferences';
 import { createUploadedResourceReference, isImageResource, readFileAsUploadedResource } from '../utils/uploadedResources';
 import { debugLog, debugError } from '../utils/debugLogger';
@@ -214,7 +214,9 @@ export function useChatComposer({ onMessageSent }: UseChatComposerArgs) {
       return;
     }
 
-    const serializedContent = serializeComposerMessage(trimmedInput, draftReferences, draftNodes);
+    // 气泡只显示摘要文本；skill 全文等引用内容由 blocks.reference_list 携带，
+    // 发送给模型时再注入上下文（见 useGeneration 的 user 消息序列化）。
+    const displayContent = (draftNodesToText(draftNodes, draftReferences) || trimmedInput).trim();
     const messageBlocks = buildComposerBlocks(trimmedInput, draftReferences, draftNodes);
 
     let targetChatId = activeChatId;
@@ -244,7 +246,7 @@ export function useChatComposer({ onMessageSent }: UseChatComposerArgs) {
     appendChatMessage(targetChatId, {
       id: crypto.randomUUID(),
       role: 'user',
-      content: serializedContent,
+      content: displayContent,
       blocks: messageBlocks,
     });
 

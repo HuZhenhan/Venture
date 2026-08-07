@@ -8,6 +8,7 @@ import { RightPanelRail } from './RightPanelRail';
 import { BrowserPanel } from './BrowserPanel';
 import { WorkflowCanvas } from './WorkflowCanvas';
 import { ScriptPanel } from './scripts/ScriptPanel';
+import { SkillPanel } from './skills/SkillPanel';
 import { ProgressToast } from './agent/ProgressToast';
 import { AccessibilityPermissionDialog } from './agent/AccessibilityPermissionDialog';
 import { DesktopPanels, SinglePagePanels } from './layout/MainLayoutPanels';
@@ -30,6 +31,7 @@ import {
   selectToggleBrowserSummary,
   selectToggleWorkflow,
   selectToggleScripts,
+  selectToggleSkills,
   selectSyncPanelVisibility,
   selectShowChatPanel,
   selectTogglePanel,
@@ -69,6 +71,7 @@ export function MainLayout() {
   const toggleBrowserSummary = useLayoutStore(selectToggleBrowserSummary);
   const toggleWorkflow = useLayoutStore(selectToggleWorkflow);
   const toggleScripts = useLayoutStore(selectToggleScripts);
+  const toggleSkills = useLayoutStore(selectToggleSkills);
   const syncPanelVisibility = useLayoutStore(selectSyncPanelVisibility);
   const showChatPanel = useLayoutStore(selectShowChatPanel);
   const togglePanel = useLayoutStore(selectTogglePanel);
@@ -156,6 +159,7 @@ export function MainLayout() {
   const showDockedBrowser = !singlePageMode && adaptiveVisibility.showBrowser;
   const showDockedWorkflow = !singlePageMode && adaptiveVisibility.showWorkflow;
   const showDockedScripts = !singlePageMode && adaptiveVisibility.showScripts;
+  const showDockedSkills = !singlePageMode && adaptiveVisibility.showSkills;
 
   const toggleSettings = useCallback(() => togglePanel('settings'), [togglePanel]);
   const toggleUsage = useCallback(() => togglePanel('usage'), [togglePanel]);
@@ -164,6 +168,7 @@ export function MainLayout() {
   const handleToggleBrowserSummary = useCallback(() => toggleBrowserSummary(), [toggleBrowserSummary]);
   const handleToggleWorkflow = useCallback(() => toggleWorkflow(), [toggleWorkflow]);
   const handleToggleScripts = useCallback(() => toggleScripts(), [toggleScripts]);
+  const handleToggleSkills = useCallback(() => toggleSkills(), [toggleSkills]);
 
   // ── Lazy panel mounting ──────────────────────────────────────────────────────
   // Panels that have never been opened are NOT mounted in the DOM, saving initial
@@ -292,6 +297,16 @@ export function MainLayout() {
               <ScriptPanel width={responsiveWidths.scriptsWidth} />
             </motion.div>
 
+            {/* 技能管理面板：与对话区域同级平铺 */}
+            <motion.div
+              initial={false}
+              animate={{ width: showDockedSkills ? responsiveWidths.skillsWidth : 0, opacity: showDockedSkills ? 1 : 0 }}
+              transition={PANEL_TRANSITION}
+              className={`shrink-0 flex h-full overflow-hidden ${showDockedSkills ? 'border-l border-border' : 'pointer-events-none'}`}
+            >
+              <SkillPanel width={responsiveWidths.skillsWidth} />
+            </motion.div>
+
             {/* 小屏幕下的遮罩层 (与左侧栏对齐的逻辑) */}
             <AnimatePresence>
               {singlePageMode && adaptiveVisibility.singlePageView !== 'chat' && (
@@ -360,6 +375,7 @@ export function MainLayout() {
                 isBrowserSummaryOpen={isBrowserSummaryOpen}
                 isWorkflowActive={railState.workflowActive}
                 isScriptsActive={railState.scriptsActive}
+                isSkillsActive={railState.skillsActive}
                 onShowChat={showChat}
                 onToggleSettings={toggleSettings}
                 onToggleUsage={toggleUsage}
@@ -367,6 +383,7 @@ export function MainLayout() {
                 onToggleBrowserSummary={handleToggleBrowserSummary}
                 onToggleWorkflow={handleToggleWorkflow}
                 onToggleScripts={handleToggleScripts}
+                onToggleSkills={handleToggleSkills}
               />
             </div>
           </motion.div>

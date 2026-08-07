@@ -51,6 +51,8 @@ const READONLY_ALLOWED_TOOLS = new Set([
   'taskupdate',
   'tasklist',
   'taskget',
+  'list_skill',
+  'load_skill',
 ]);
 
 /** 仅一般操作级别自动放行的工具（小写工具名）= 只读集 + 写入/编辑。 */

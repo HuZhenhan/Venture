@@ -70,11 +70,13 @@ export interface ResponsiveLayout {
   browserParticipatesInLayout: boolean;
   workflowParticipatesInLayout: boolean;
   scriptsParticipatesInLayout: boolean;
+  skillsParticipatesInLayout: boolean;
   settingsParticipatesInLayout: boolean;
   usageParticipatesInLayout: boolean;
   singlePageContentWidth: number;
   workflowWidth: number;
   scriptsWidth: number;
+  skillsWidth: number;
 }
 
 function areResponsiveLayoutsEqual(a: ResponsiveLayout, b: ResponsiveLayout) {
@@ -93,11 +95,13 @@ function areResponsiveLayoutsEqual(a: ResponsiveLayout, b: ResponsiveLayout) {
     a.browserParticipatesInLayout === b.browserParticipatesInLayout &&
     a.workflowParticipatesInLayout === b.workflowParticipatesInLayout &&
     a.scriptsParticipatesInLayout === b.scriptsParticipatesInLayout &&
+    a.skillsParticipatesInLayout === b.skillsParticipatesInLayout &&
     a.settingsParticipatesInLayout === b.settingsParticipatesInLayout &&
     a.usageParticipatesInLayout === b.usageParticipatesInLayout &&
     a.singlePageContentWidth === b.singlePageContentWidth &&
     a.workflowWidth === b.workflowWidth &&
-    a.scriptsWidth === b.scriptsWidth
+    a.scriptsWidth === b.scriptsWidth &&
+    a.skillsWidth === b.skillsWidth
   );
 }
 
@@ -142,13 +146,15 @@ function deriveResponsiveLayout(state: LayoutComputationState): ResponsiveLayout
   const browserParticipatesInLayout = !singlePageMode && state.isBrowserOpen && state.activeWorkspaceView === 'browser';
   const workflowParticipatesInLayout = !singlePageMode && state.activeWorkspaceView === 'workflow';
   const scriptsParticipatesInLayout = !singlePageMode && state.activeWorkspaceView === 'scripts';
+  const skillsParticipatesInLayout = !singlePageMode && state.activeWorkspaceView === 'skills';
   const settingsParticipatesInLayout = !singlePageMode && state.isSettingsOpen && state.activeWorkspaceView === 'settings';
   const usageParticipatesInLayout = !singlePageMode && state.isUsageOpen && state.activeWorkspaceView === 'usage';
-  // 浏览器/工作流/脚本面板打开时折叠聊天区，让它从屏幕左边缘开始
+  // 浏览器/工作流/脚本/技能面板打开时折叠聊天区，让它从屏幕左边缘开始
   const shouldCollapseChat = (singlePageMode && state.activeWorkspaceView !== 'chat')
     || browserParticipatesInLayout
     || workflowParticipatesInLayout
-    || scriptsParticipatesInLayout;
+    || scriptsParticipatesInLayout
+    || skillsParticipatesInLayout;
   const chatReserve = shouldCollapseChat ? 0 : 320;
   const availableBesideSidebar = Math.max(
     usableViewportWidth - (sidebarParticipatesInLayout ? state.sidebarWidth : 0),
@@ -165,6 +171,9 @@ function deriveResponsiveLayout(state: LayoutComputationState): ResponsiveLayout
   const scriptsWidth = scriptsParticipatesInLayout
     ? panelWidthForAvailable(workflowWidthTarget, MIN_BROWSER_WIDTH, availableBesideSidebar - chatReserve)
     : 0;
+  const skillsWidth = skillsParticipatesInLayout
+    ? panelWidthForAvailable(workflowWidthTarget, MIN_BROWSER_WIDTH, availableBesideSidebar - chatReserve)
+    : 0;
   const settingsPanelWidth = settingsParticipatesInLayout || usageParticipatesInLayout
     ? panelWidthForAvailable(
         state.settingsWidth,
@@ -172,7 +181,7 @@ function deriveResponsiveLayout(state: LayoutComputationState): ResponsiveLayout
         availableBesideSidebar - chatReserve
       )
     : 0;
-  const activeExtraPanelWidth = browserWidth + workflowWidth + scriptsWidth
+  const activeExtraPanelWidth = browserWidth + workflowWidth + scriptsWidth + skillsWidth
     + (settingsParticipatesInLayout ? settingsPanelWidth : 0)
     + (usageParticipatesInLayout ? settingsPanelWidth : 0);
   const availableForCore = usableViewportWidth - activeExtraPanelWidth;
@@ -230,11 +239,13 @@ function deriveResponsiveLayout(state: LayoutComputationState): ResponsiveLayout
     browserParticipatesInLayout,
     workflowParticipatesInLayout,
     scriptsParticipatesInLayout,
+    skillsParticipatesInLayout,
     settingsParticipatesInLayout,
     usageParticipatesInLayout,
     singlePageContentWidth: Math.max(usableViewportWidth, 0),
     workflowWidth,
     scriptsWidth,
+    skillsWidth,
   };
 }
 
@@ -273,6 +284,7 @@ export const selectToggleBrowser = (state: LayoutState) => state.toggleBrowser;
 export const selectToggleBrowserSummary = (state: LayoutState) => state.toggleBrowserSummary;
 export const selectToggleWorkflow = (state: LayoutState) => state.toggleWorkflow;
 export const selectToggleScripts = (state: LayoutState) => state.toggleScripts;
+export const selectToggleSkills = (state: LayoutState) => state.toggleSkills;
 export const selectSyncPanelVisibility = (state: LayoutState) => state.syncPanelVisibility;
 export const selectShowChatPanel = (state: LayoutState) => state.showChatPanel;
 export const selectTogglePanel = (state: LayoutState) => state.togglePanel;
@@ -288,7 +300,7 @@ export const selectToggleRightRail = (state: LayoutState) => state.toggleRightRa
 
 const layoutCache: { value: ResponsiveLayout | null } = { value: null };
 
-export type SettingsTab = 'basic' | 'api' | 'migration';
+export type SettingsTab = 'basic' | 'api' | 'migration' | 'skills';
 
 interface LayoutState {
   showFpsOverlay: boolean;
@@ -339,6 +351,7 @@ interface LayoutState {
   toggleBrowserSummary: () => void;
   toggleWorkflow: () => void;
   toggleScripts: () => void;
+  toggleSkills: () => void;
   clearActiveDiff: () => void;
   syncPanelVisibility: () => void;
   showChatPanel: () => void;
@@ -439,6 +452,16 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   }),
   toggleScripts: () => set((state) => {
     const nextView: WorkspaceView = state.activeWorkspaceView === 'scripts' ? 'chat' : 'scripts';
+    return {
+      activeWorkspaceView: nextView,
+      singlePageView: nextView,
+      isEditorOpen: false,
+      isSettingsOpen: false,
+      isUsageOpen: false,
+    };
+  }),
+  toggleSkills: () => set((state) => {
+    const nextView: WorkspaceView = state.activeWorkspaceView === 'skills' ? 'chat' : 'skills';
     return {
       activeWorkspaceView: nextView,
       singlePageView: nextView,

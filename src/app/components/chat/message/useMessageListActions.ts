@@ -55,6 +55,12 @@ export function useMessageListActions(chat: { id: string; messages: Message[] } 
       return;
     }
 
+    if (reference.kind === 'skill') {
+      const layout = useLayoutStore.getState();
+      if (layout.activeWorkspaceView !== 'skills') layout.toggleSkills();
+      return;
+    }
+
     if (reference.diffId) {
       openDiff(reference.diffId);
       return;

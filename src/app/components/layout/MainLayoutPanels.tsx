@@ -8,9 +8,10 @@ import { UsagePanel } from '../UsagePanel';
 import { BrowserPanel } from '../BrowserPanel';
 import { WorkflowCanvas } from '../WorkflowCanvas';
 import { ScriptPanel } from '../scripts/ScriptPanel';
+import { SkillPanel } from '../skills/SkillPanel';
 
 interface SinglePagePanelsProps {
-  singlePageView: 'chat' | 'browser' | 'workflow' | 'scripts' | 'editor' | 'settings' | 'usage';
+  singlePageView: 'chat' | 'browser' | 'workflow' | 'scripts' | 'skills' | 'editor' | 'settings' | 'usage';
   singlePageContentWidth: number;
   shellClassName: string;
   isBrowserOpen: boolean;
@@ -181,6 +182,21 @@ export const SinglePagePanels = React.memo(function SinglePagePanels({
           style={{ width: singlePageContentWidth, zIndex: motionProps.zIndex }}
         >
           <ScriptPanel width={singlePageContentWidth} />
+        </motion.div>
+      );
+    }
+
+    if (view === 'skills') {
+      return (
+        <motion.div
+          key={panelKey}
+          initial={motionProps.initial}
+          animate={motionProps.animate}
+          transition={overlayTransition}
+          className={elevatedPanelClassName}
+          style={{ width: singlePageContentWidth, zIndex: motionProps.zIndex }}
+        >
+          <SkillPanel width={singlePageContentWidth} />
         </motion.div>
       );
     }

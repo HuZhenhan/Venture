@@ -1,13 +1,15 @@
-import { ComponentType, useMemo, useState } from "react";
+import { ComponentType, useEffect, useMemo, useState } from "react";
 import { motion } from "motion/react";
 import {
   Globe,
   MessageSquareText,
+  ScrollText,
   Search,
   X,
 } from "lucide-react";
 import { useChatStore } from "../../store/useChatStore";
 import { ComposerReference, ComposerReferenceKind } from "../../types";
+import { getSkillContent, listSkills, type SkillInfo } from "../../services/skillService";
 
 interface ComposerReferenceMenuProps {
   onClose: () => void;
@@ -25,10 +27,12 @@ interface ReferenceOption {
   label: string;
   detail?: string;
   description?: string;
-  buildReference: () => ComposerReference;
+  badge?: string;
+  buildReference: () => ComposerReference | Promise<ComposerReference>;
 }
 
 const CATEGORIES: ReferenceCategory[] = [
+  { id: "skill", label: "技能", icon: ScrollText },
   { id: "chat", label: "Past Chats", icon: MessageSquareText },
   { id: "web", label: "Web", icon: Globe },
 ];
@@ -68,15 +72,49 @@ export function ComposerReferenceMenu({
   const chats = useChatStore((state) => state.chats);
   const [activeCategory, setActiveCategory] = useState<ComposerReferenceKind>("chat");
   const [query, setQuery] = useState("");
+  const [skills, setSkills] = useState<SkillInfo[] | null>(null);
 
   const loweredQuery = query.trim().toLowerCase();
 
+  // 技能分类：按需拉取一次列表
+  useEffect(() => {
+    if (activeCategory !== "skill" || skills !== null) return;
+    let cancelled = false;
+    listSkills()
+      .then((result) => {
+        if (!cancelled) setSkills(result.skills);
+      })
+      .catch(() => {
+        if (!cancelled) setSkills([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeCategory, skills]);
+
   const options = useMemo<ReferenceOption[]>(() => {
-
-
-
-
-
+    if (activeCategory === "skill") {
+      return (skills ?? [])
+        .filter((skill) => skill.enabled && skill.userInvocable)
+        .filter(
+          (skill) =>
+            !loweredQuery ||
+            skill.name.toLowerCase().includes(loweredQuery) ||
+            (skill.description ?? "").toLowerCase().includes(loweredQuery),
+        )
+        .map((skill) => ({
+          id: `skill:${skill.canonicalName}`,
+          label: skill.name,
+          detail: skill.description?.trim() || undefined,
+          description: "技能",
+          badge: skill.permission === "deny" ? "权限拒绝" : undefined,
+          buildReference: async () => {
+            // 引用时拉取 SKILL.md 完整原文随消息发送
+            const content = await getSkillContent(skill.name);
+            return createReference("skill", skill.name, undefined, { content });
+          },
+        }));
+    }
 
     if (activeCategory === "chat") {
       return chats
@@ -112,7 +150,7 @@ export function ComposerReferenceMenu({
     }
 
     return [];
-  }, [activeCategory, chats, loweredQuery, query]);
+  }, [activeCategory, chats, loweredQuery, query, skills]);
 
   const activeCategoryMeta = CATEGORIES.find((category) => category.id === activeCategory) ?? CATEGORIES[0];
   const ActiveCategoryIcon = activeCategoryMeta.icon;
@@ -192,8 +230,10 @@ export function ComposerReferenceMenu({
                   type="button"
                   onMouseDown={(event) => event.preventDefault()}
                   onClick={() => {
-                    onSelect(option.buildReference());
-                    onClose();
+                    void Promise.resolve(option.buildReference()).then((reference) => {
+                      onSelect(reference);
+                      onClose();
+                    });
                   }}
                   className="flex w-full items-start gap-3 rounded-2xl px-2.5 py-2.5 text-left transition-colors hover:bg-muted/50 sm:px-3"
                 >
@@ -201,8 +241,15 @@ export function ComposerReferenceMenu({
                     <ActiveCategoryIcon size={14} />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-[13px] font-medium text-foreground">
-                      {option.label}
+                    <span className="flex items-center gap-1.5">
+                      <span className="block truncate text-[13px] font-medium text-foreground">
+                        {option.label}
+                      </span>
+                      {option.badge ? (
+                        <span className="shrink-0 rounded-full bg-red-500/10 px-1.5 py-0.5 text-[9px] font-bold text-red-500">
+                          {option.badge}
+                        </span>
+                      ) : null}
                     </span>
                     {option.detail ? (
                       <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">

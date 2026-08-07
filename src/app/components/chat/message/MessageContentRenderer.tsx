@@ -9,6 +9,7 @@ import { ComposerReferencePill } from '../cards/ComposerReferencePill';
 import { AskCardInline, AskCardFull } from '../cards/AskCardContainer';
 import { ToolApprovalCard } from '../cards/ToolApprovalCard';
 import { ToolCallCard } from '../cards/ToolCallCard';
+import { isSkillToolCall, SkillToolCard } from '../cards/SkillToolCards';
 import { MessageTextSelectionMenu } from './MessageTextSelectionMenu';
 import {
   adaptLegacyMessageContent,
@@ -216,6 +217,13 @@ export const MessageContentRenderer = memo(function MessageContentRenderer({
                   />
                 );
               }
+              if (isSkillToolCall(tool.name)) {
+                return (
+                  <motion.div key={tool.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }}>
+                    <SkillToolCard tool={tool} />
+                  </motion.div>
+                );
+              }
               if (tool.name === 'AskUserQuestion') {
                 const ask = toolCallToAskForm(tool);
                 if (!ask) {
@@ -272,6 +280,13 @@ export const MessageContentRenderer = memo(function MessageContentRenderer({
                       onAlwaysApprove={(toolId) => onAlwaysApproveToolCall(message.id, toolId)}
                       onReject={(toolId) => onRejectToolCall(message.id, toolId)}
                     />
+                  );
+                }
+                if (isSkillToolCall(tool.name)) {
+                  return (
+                    <motion.div key={tool.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }}>
+                      <SkillToolCard tool={tool} />
+                    </motion.div>
                   );
                 }
                 if (tool.name === 'AskUserQuestion') {

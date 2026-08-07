@@ -8,7 +8,7 @@ import { useThemeStore, ThemeMode } from '../store/useThemeStore';
 import { getLegacyLocalDataSummary, migrateLegacyLocalData } from '../services/appDataService';
 import { useChatStore } from '../store/useChatStore';
 import { beginHorizontalResize } from '../utils/panelResize';
-import { PreferencesPanel, ProviderLibraryPanel, MigrationPanel } from './settings/SettingsSidebarPanels';
+import { PreferencesPanel, ProviderLibraryPanel, MigrationPanel, SkillSettingsPanel } from './settings/SettingsSidebarPanels';
 
 interface SettingsSidebarProps {
   isOpen: boolean;
@@ -26,7 +26,7 @@ const THEME_OPTIONS: { label: string; value: ThemeMode }[] = [
   { label: '深色模式', value: 'dark' },
 ];
 
-const SETTINGS_TABS_ORDER: SettingsTab[] = ['basic', 'api', 'migration'];
+const SETTINGS_TABS_ORDER: SettingsTab[] = ['basic', 'api', 'migration', 'skills'];
 
 export const SettingsSidebar: React.FC<SettingsSidebarProps> = ({ 
   isOpen, 
@@ -169,6 +169,8 @@ export const SettingsSidebar: React.FC<SettingsSidebarProps> = ({
             onMigrateLegacyLocalData={handleMigrateLegacyLocalData}
           />
         );
+      case 'skills':
+        return <SkillSettingsPanel />;
       default:
         return null;
     }

@@ -1,5 +1,5 @@
 import { motion, AnimatePresence } from 'motion/react';
-import { MessageSquareText, Settings2, Activity, Globe, SlidersHorizontal, Key, HardDriveDownload, FileText, Workflow, ScrollText } from 'lucide-react';
+import { MessageSquareText, Settings2, Activity, Globe, SlidersHorizontal, Key, HardDriveDownload, FileText, Workflow, ScrollText, FileCode, Sparkles } from 'lucide-react';
 import { APPLE_CURVE } from '../constants';
 import { type SettingsTab, useLayoutStore, selectActiveSettingsTab, selectSetActiveSettingsTab } from '../store/useLayoutStore';
 
@@ -12,6 +12,7 @@ interface RightPanelRailProps {
   isBrowserSummaryOpen: boolean;
   isWorkflowActive: boolean;
   isScriptsActive: boolean;
+  isSkillsActive: boolean;
   onShowChat: () => void;
   onToggleSettings: () => void;
   onToggleUsage: () => void;
@@ -19,6 +20,7 @@ interface RightPanelRailProps {
   onToggleBrowserSummary: () => void;
   onToggleWorkflow: () => void;
   onToggleScripts: () => void;
+  onToggleSkills: () => void;
 }
 
 interface RailButtonProps {
@@ -37,6 +39,7 @@ const SETTINGS_TABS: ReadonlyArray<{
   { id: 'basic', label: '基础', icon: SlidersHorizontal },
   { id: 'api', label: 'API', icon: Key },
   { id: 'migration', label: '迁移', icon: HardDriveDownload },
+  { id: 'skills', label: '技能', icon: Sparkles },
 ] as const;
 
 function RailButton({ isActive, label, onClick, controlsId, children }: RailButtonProps) {
@@ -78,6 +81,7 @@ export function RightPanelRail({
   isBrowserSummaryOpen,
   isWorkflowActive,
   isScriptsActive,
+  isSkillsActive,
   onShowChat,
   onToggleSettings,
   onToggleUsage,
@@ -85,6 +89,7 @@ export function RightPanelRail({
   onToggleBrowserSummary,
   onToggleWorkflow,
   onToggleScripts,
+  onToggleSkills,
 }: RightPanelRailProps) {
   const activeSettingsTab = useLayoutStore(selectActiveSettingsTab);
   const setActiveSettingsTab = useLayoutStore(selectSetActiveSettingsTab);
@@ -103,6 +108,9 @@ export function RightPanelRail({
           <Workflow size={17} />
         </RailButton>
         <RailButton isActive={isScriptsActive} label={isScriptsActive ? '收起脚本管理' : '打开脚本管理'} onClick={onToggleScripts}>
+          <FileCode size={17} />
+        </RailButton>
+        <RailButton isActive={isSkillsActive} label={isSkillsActive ? '收起技能管理' : '打开技能管理'} onClick={onToggleSkills}>
           <ScrollText size={17} />
         </RailButton>
       </div>

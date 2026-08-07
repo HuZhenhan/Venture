@@ -11,7 +11,7 @@ import {
 import { Message, ToolCall, ToolCallStatus, TraceRecord } from '../types';
 import { streamChat, ChatMessage, TraceCallback } from '../services/chatStreamService';
 import { generateConversationTitle, generateReasoningTitle } from '../services/titleGenerationService';
-import { buildChatMessageContentFromProtocol } from '../utils/codeReferences';
+import { buildChatMessageContentFromProtocol, serializeComposerMessage } from '../utils/codeReferences';
 import {
   adaptLegacyMessageContent,
   getThinkingText,
@@ -22,6 +22,7 @@ import { executeTool } from '../services/toolService';
 import { checkAccessibilityPermissionOnce, executeAgentTool, isAgentTool, waitForPermissionResolution } from '../services/agentService';
 import { useAgentStore } from '../store/agentState';
 import { usePreferencesStore } from '../store/usePreferencesStore';
+import { debugError } from '../utils/debugLogger';
 import {
   APPROVAL_EXPIRED_OUTPUT,
   evaluateToolCall,
@@ -530,8 +531,12 @@ export function useGeneration() {
   );
 
   const triggerAIResponse = useCallback(
-    async (chatId: string, modelId?: string, options?: { continueMessageId?: string }) => {
+    async (chatId: string, modelId?: string, options?: { continueMessageId?: string; autoRetried?: boolean; resumeContent?: string }) => {
     const isContinue = !!options?.continueMessageId;
+    // 自动续传标记：上游流中断时自动重试一次，重试的调用不再续传（防死循环）
+    const isAutoRetry = !!options?.autoRetried;
+    // 续写内容：中断前已生成的部分正文（作为最后一条 assistant 消息让模型继续补全）
+    const resumeContent = options?.resumeContent;
     const aiMessageId = isContinue ? options!.continueMessageId! : crypto.randomUUID();
     // 新一轮生成：递增序号以取消任何仍在执行的旧 runToolLoop，防止并发 continue。
     // 同时重置工具循环计数器；continue 模式沿用已有计数。
@@ -558,7 +563,7 @@ export function useGeneration() {
         const placeholderMessage: Message = {
           id: aiMessageId,
           role: 'ai',
-          content: '',
+          content: resumeContent ?? '',
           blocks: [],
           status: 'loading',
         };
@@ -647,10 +652,18 @@ export function useGeneration() {
         // 首轮生成时跳过当前（空占位）消息；continue 模式需包含已有内容和工具调用/结果
         if (msg.id === aiMessageId && !isContinue) continue;
         const content = adaptLegacyMessageContent(msg);
-        const apiContent = buildChatMessageContentFromProtocol(
-          content,
-          msg.role === 'user' && (activeModel.supportsMultimodal ?? false),
-        );
+        // user 消息：气泡 content 只含摘要文本，引用内容（skill 全文等）在
+        // blocks.reference_list 中携带，发送时重新序列化，确保完整注入模型上下文
+        const apiContent = msg.role === 'user'
+          ? buildChatMessageContentFromProtocol(
+              serializeComposerMessage(
+                content,
+                (msg.blocks ?? []).find((b) => b.type === 'reference_list')?.references ?? [],
+                [],
+              ),
+              activeModel.supportsMultimodal ?? false,
+            )
+          : buildChatMessageContentFromProtocol(content, false);
 
         if (msg.role === 'user') {
           apiMessages.push({ role: 'user', content: apiContent });
@@ -666,8 +679,10 @@ export function useGeneration() {
           const flush = () => {
             if (!bufContent && !bufReasoning && bufCalls.length === 0) return;
             const assistantMsg: ChatMessage = { role: 'assistant', content: bufContent };
-            if (bufReasoning) assistantMsg.reasoning_content = bufReasoning;
             if (bufCalls.length > 0) {
+              // DeepSeek 规范：进行工具调用的轮次必须回传 reasoning_content（缺失 400）；
+              // 无工具调用的轮次传入会被忽略，不回传以节省 token
+              if (bufReasoning) assistantMsg.reasoning_content = bufReasoning;
               assistantMsg.tool_calls = bufCalls.map((tc) => ({
                 id: tc.id,
                 type: 'function' as const,
@@ -711,14 +726,16 @@ export function useGeneration() {
         }
 
         // ── 兼容旧格式（无 segments）：整条消息 + 全部 tool_calls ──────
-        const reasoningContent = msg.reasoning
-          ? { reasoning_content: msg.reasoning }
-          : {};
         // 只包含已执行完毕的 tool calls，避免 pending/running 状态的工具没有对应 tool 结果而触
         // 发 "role 'tool' must be a response to a preceding message with 'tool_calls'" 错误
         const resolvedCalls = (msg.toolCalls ?? []).filter(
           (tc) => tc.status === 'completed' || tc.status === 'failed',
         );
+        // DeepSeek 规范：仅进行工具调用的轮次必须回传 reasoning_content（缺失 400）；
+        // 无工具调用的轮次传入会被忽略，不回传以节省 token
+        const reasoningContent = resolvedCalls.length > 0 && msg.reasoning
+          ? { reasoning_content: msg.reasoning }
+          : {};
         if (resolvedCalls.length > 0) {
           apiMessages.push({
             role: 'assistant',
@@ -736,6 +753,12 @@ export function useGeneration() {
         } else {
           apiMessages.push({ role: 'assistant', content: apiContent, ...reasoningContent });
         }
+      }
+
+      // 续写模式：把中断前已生成的部分正文作为最后一条 assistant 消息，
+      // 让模型从断点继续补全（而非重新生成）
+      if (resumeContent) {
+        apiMessages.push({ role: 'assistant', content: resumeContent });
       }
 
       // Set up trace recording if debug mode is on and this chat is being traced
@@ -854,6 +877,34 @@ export function useGeneration() {
               // Agent 工具循环：检测 pending 工具调用 → 执行 → 继续生成。
               void runToolLoop(chatId, aiMessageId, resolvedModelId, isContinue, turnMessageId);
             } else if (event.event === 'error') {
+              // 提取上游追踪数据（错误事件同样附带请求体，供排查 400 等问题）
+              if (event.data.upstream_trace) {
+                upstreamTrace = {
+                  request: event.data.upstream_trace.request,
+                  response: { rawEvents: event.data.upstream_trace.events },
+                };
+              }
+              // 上游流中断/解码失败（服务端偶发断连）：自动续传一次——
+              // 已生成的部分正文作为续写点继续补全（纯推理/工具轮中断则回退重新生成），
+              // 先记录本次失败 trace 供排查，再清理占位消息
+              if (
+                event.data.code === 'UPSTREAM_STREAM_ERROR' &&
+                !isAutoRetry &&
+                !isContinue
+              ) {
+                finishTraceRecord();
+                const partialMsg = useChatStore
+                  .getState()
+                  .chats.find((c) => c.id === chatId)
+                  ?.messages.find((m) => m.id === aiMessageId);
+                const partialContent = partialMsg?.content?.trim() ?? '';
+                updateChatMessages(chatId, (msgs) => msgs.filter((m) => m.id !== aiMessageId));
+                void triggerAIResponse(chatId, resolvedModelId, {
+                  autoRetried: true,
+                  resumeContent: partialContent || undefined,
+                }).catch((err) => debugError('generation', 'auto retry failed', { error: err }));
+                return;
+              }
               finishTraceRecord();
               const errorContent = formatErrorContent(event.data.code, event.data.message);
               updateMessageInChat(chatId, aiMessageId, (message) => ({

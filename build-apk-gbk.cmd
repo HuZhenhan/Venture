@@ -1,18 +1,18 @@
 @echo off
 REM ============================================================
-REM  Venture Android ä¸€é”®æ‰“åŒ…+å®‰è£…è„šæœ¬ (Windows CMD)
-REM  æ”¯æŒå¹¶è¡Œæž„å»ºã€è‡ªåŠ¨ç­¾åã€ADB å®‰è£…
+REM  Venture Android Ò»¼ü´ò°ü+°²×°½Å±¾ (Windows CMD)
+REM  Ö§³Ö²¢ÐÐ¹¹½¨¡¢×Ô¶¯Ç©Ãû¡¢ADB °²×°
 REM
-REM  ç”¨æ³•:
-REM    build-apk.cmd             å®Œæ•´æž„å»º+å®‰è£…
-REM    build-apk.cmd --no-install ä»…æ‰“åŒ…ä¸å®‰è£…
-REM    build-apk.cmd --skip-rust  è·³è¿‡ Rust ç¼–è¯‘
-REM    build-apk.cmd --skip-front è·³è¿‡å‰ç«¯æž„å»º
-REM    build-apk.cmd --clean      æ¸…ç†åŽé‡æ–°æž„å»º
+REM  ÓÃ·¨:
+REM    build-apk.cmd             ÍêÕû¹¹½¨+°²×°
+REM    build-apk.cmd --no-install ½ö´ò°ü²»°²×°
+REM    build-apk.cmd --skip-rust  Ìø¹ý Rust ±àÒë
+REM    build-apk.cmd --skip-front Ìø¹ýÇ°¶Ë¹¹½¨
+REM    build-apk.cmd --clean      ÇåÀíºóÖØÐÂ¹¹½¨
 REM ============================================================
 setlocal enabledelayedexpansion
 
-REM â”€â”€ è§£æžå‚æ•° â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+REM ©¤©¤ ½âÎö²ÎÊý ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
 set "SKIP_FRONT="
 set "SKIP_RUST="
 set "NO_INSTALL="
@@ -30,24 +30,24 @@ shift
 goto parse_args
 
 :show_help
-echo ç”¨æ³•: build-apk.cmd [é€‰é¡¹]
-echo   --skip-front   è·³è¿‡å‰ç«¯æž„å»º
-echo   --skip-rust    è·³è¿‡ Rust ç¼–è¯‘
-echo   --no-install   ä»…æ‰“åŒ… APKï¼Œä¸å®‰è£…åˆ°è®¾å¤‡
-echo   --clean        å…ˆæ¸…ç†æž„å»ºäº§ç‰©
+echo ÓÃ·¨: build-apk.cmd [Ñ¡Ïî]
+echo   --skip-front   Ìø¹ýÇ°¶Ë¹¹½¨
+echo   --skip-rust    Ìø¹ý Rust ±àÒë
+echo   --no-install   ½ö´ò°ü APK£¬²»°²×°µ½Éè±¸
+echo   --clean        ÏÈÇåÀí¹¹½¨²úÎï
 endlocal
 exit /b 0
 
 :args_done
 
-REM â”€â”€ çŽ¯å¢ƒè‡ªåŠ¨æ£€æµ‹ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+REM ©¤©¤ »·¾³×Ô¶¯¼ì²â ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
 if "%ANDROID_HOME%"=="" (
     if exist "%LOCALAPPDATA%\Android\Sdk" (
         set "ANDROID_HOME=%LOCALAPPDATA%\Android\Sdk"
     )
 )
 if "%ANDROID_HOME%"=="" (
-    echo [FAIL] ANDROID_HOME æœªè®¾ç½®
+    echo [FAIL] ANDROID_HOME Î´ÉèÖÃ
     endlocal
     exit /b 1
 )
@@ -71,7 +71,7 @@ if "%JAVA_HOME%"=="" (
 )
 :java_found
 if not exist "%JAVA_HOME%" (
-    echo [FAIL] JAVA_HOME æ— æ•ˆ: %JAVA_HOME%
+    echo [FAIL] JAVA_HOME ÎÞÐ§: %JAVA_HOME%
     endlocal
     exit /b 1
 )
@@ -80,7 +80,7 @@ REM NDK bin
 set "NDK_BIN=%ANDROID_NDK_HOME%\toolchains\llvm\prebuilt\windows-x86_64\bin"
 set "PATH=%USERPROFILE%\.cargo\bin;%NDK_BIN%;%JAVA_HOME%\bin;%ANDROID_HOME%\platform-tools;%ANDROID_HOME%\build-tools\36.0.0;%ANDROID_HOME%\build-tools\35.0.0;%ANDROID_HOME%\build-tools\34.0.0;%PATH%"
 
-REM â”€â”€ è·¯å¾„å¸¸é‡ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+REM ©¤©¤ Â·¾¶³£Á¿ ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
 set "PROJECT_ROOT=%~dp0"
 set "TAURI_DIR=%PROJECT_ROOT%src-tauri"
 set "GEN_DIR=%TAURI_DIR%\gen\android"
@@ -92,80 +92,85 @@ set "FINAL_APK=%PROJECT_ROOT%Venture-release-signed.apk"
 
 echo.
 echo ============================================================
-echo  Venture Android ä¸€é”®æ‰“åŒ…+å®‰è£…è„šæœ¬
+echo  Venture Android Ò»¼ü´ò°ü+°²×°½Å±¾
 echo ============================================================
 echo.
-echo [çŽ¯å¢ƒ]
+echo [»·¾³]
 echo   ANDROID_HOME = %ANDROID_HOME%
 echo   ANDROID_NDK  = %ANDROID_NDK_HOME%
 echo   JAVA_HOME    = %JAVA_HOME%
 echo.
 
-REM â”€â”€ æ¸…ç† â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+REM ©¤©¤ ÇåÀí ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
 if defined DO_CLEAN (
-    echo [INFO] æ¸…ç†æž„å»ºäº§ç‰©...
+    echo [INFO] ÇåÀí¹¹½¨²úÎï...
     if exist "%PROJECT_ROOT%dist\web" rmdir /s /q "%PROJECT_ROOT%dist\web"
     if exist "%GEN_DIR%\app\build" rmdir /s /q "%GEN_DIR%\app\build"
 )
 
-REM â”€â”€ CMD ä¸æ”¯æŒå¹¶è¡Œï¼Œæ”¹ç”¨é¡ºåºæ‰§è¡Œ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+REM ©¤©¤ CMD ²»Ö§³Ö²¢ÐÐ£¬¸ÄÓÃË³ÐòÖ´ÐÐ ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
 
-REM â”€â”€ æ­¥éª¤ 1: æž„å»ºå‰ç«¯ â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+REM ©¤©¤ ²½Öè 1: ¹¹½¨Ç°¶Ë ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
 if defined SKIP_FRONT (
     if exist "%PROJECT_ROOT%dist\web\index.html" (
-        echo [WARN] è·³è¿‡å‰ç«¯æž„å»º
+        echo [WARN] Ìø¹ýÇ°¶Ë¹¹½¨
     ) else (
-        echo [FAIL] --skip-front ä½†å‰ç«¯äº§ç‰©ä¸å­˜åœ¨
+        echo [FAIL] --skip-front µ«Ç°¶Ë²úÎï²»´æÔÚ
         endlocal & exit /b 1
     )
 ) else (
-    echo [1/5] æž„å»ºå‰ç«¯...
+    echo [1/5] ¹¹½¨Ç°¶Ë...
     cd /d "%PROJECT_ROOT%"
     call npm run build:tauri
     if !errorlevel! neq 0 (
-        echo [FAIL] å‰ç«¯æž„å»ºå¤±è´¥
+        echo [FAIL] Ç°¶Ë¹¹½¨Ê§°Ü
         endlocal & exit /b 1
     )
     echo   =^> OK
 )
 
-REM â”€â”€ æ­¥éª¤ 2: ç¼–è¯‘ Rust â†’ .so â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+REM ©¤©¤ ²½Öè 2: ±àÒë Rust ¡ú .so ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
 if defined SKIP_RUST (
     if exist "%SO_SOURCE%" (
-        echo [WARN] è·³è¿‡ Rust ç¼–è¯‘
+        echo [WARN] Ìø¹ý Rust ±àÒë
     ) else (
-        echo [FAIL] --skip-rust ä½† .so ä¸å­˜åœ¨
+        echo [FAIL] --skip-rust µ« .so ²»´æÔÚ
         endlocal & exit /b 1
     )
 ) else (
-    echo [2/5] ç¼–è¯‘ Rust (aarch64-linux-android)...
+    echo [2/5] ±àÒë Rust ^(aarch64-linux-android^)...
     cd /d "%PROJECT_ROOT%"
     set "CC_aarch64_linux_android=%NDK_BIN%\aarch64-linux-android35-clang.cmd"
     set "AR_aarch64_linux_android=%NDK_BIN%\llvm-ar.exe"
+echo MARKER_BEFORE_CARGO
     cargo build --manifest-path "%TAURI_DIR%\Cargo.toml" --target aarch64-linux-android --lib --release
+echo MARKER_AFTER_CARGO CODE=%errorlevel%
     if !errorlevel! neq 0 (
-        echo [FAIL] Rust ç¼–è¯‘å¤±è´¥
+        echo [FAIL] Rust ±àÒëÊ§°Ü
         endlocal & exit /b 1
     )
     echo   =^> OK
 )
 
-REM â”€â”€ æ­¥éª¤ 3: å¤åˆ¶äº§ç‰© â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-echo [3/5] å¤åˆ¶äº§ç‰©åˆ° Android é¡¹ç›®...
+REM ©¤©¤ ²½Öè 3: ¸´ÖÆ²úÎï ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+echo [3/5] ¸´ÖÆ²úÎïµ½ Android ÏîÄ¿...
 if not exist "%ASSETS_DIR%" mkdir "%ASSETS_DIR%"
 if exist "%ASSETS_DIR%\*" del /q "%ASSETS_DIR%\*" 2>nul
 xcopy /e /y "%PROJECT_ROOT%dist\web\*" "%ASSETS_DIR%\" >nul
 if not exist "%ASSETS_DIR%\index.html" (
-    echo [FAIL] å‰ç«¯å¤åˆ¶å¤±è´¥
+    echo [FAIL] Ç°¶Ë¸´ÖÆÊ§°Ü
     endlocal & exit /b 1
 )
 if not exist "%JNILIBS_DIR%" mkdir "%JNILIBS_DIR%"
 copy /y "%SO_SOURCE%" "%JNILIBS_DIR%\" >nul
-echo   å‰ç«¯ + .so =^> OK
+echo   Ç°¶Ë + .so =^> OK
 
-REM â”€â”€ æ­¥éª¤ 4: Gradle æ‰“åŒ… â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+REM ©¤©¤ ²½Öè 4: Gradle ´ò°ü ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
 echo [4/5] Gradle assembleRelease...
+echo DEBUG_GEN_DIR=%GEN_DIR%
 cd /d "%GEN_DIR%"
+echo DEBUG_CD=%CD%
+if exist gradlew.bat (echo DEBUG_GW_FOUND) else (echo DEBUG_GW_MISSING)
 call gradlew.bat assembleRelease ^
     -x :app:rustBuildArm64Release ^
     -x :app:rustBuildArmRelease ^
@@ -173,61 +178,61 @@ call gradlew.bat assembleRelease ^
     -x :app:rustBuildX86_64Release ^
     --no-daemon
 if !errorlevel! neq 0 (
-    echo [FAIL] Gradle æ‰“åŒ…å¤±è´¥
+    echo [FAIL] Gradle ´ò°üÊ§°Ü
     endlocal & exit /b 1
 )
 if not exist "%OUT_APK%" (
-    echo [FAIL] APK æœªç”Ÿæˆ
+    echo [FAIL] APK Î´Éú³É
     endlocal & exit /b 1
 )
-echo   =^> APK æž„å»ºæˆåŠŸ
+echo   =^> APK ¹¹½¨³É¹¦
 
-REM â”€â”€ æ­¥éª¤ 5: ç­¾å â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-echo [5/5] ç­¾å APK...
+REM ©¤©¤ ²½Öè 5: Ç©Ãû ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
+echo [5/5] Ç©Ãû APK...
 set "DEBUG_KS=%USERPROFILE%\.android\debug.keystore"
 if not exist "%DEBUG_KS%" (
-    echo [FAIL] æ‰¾ä¸åˆ° debug.keystore
+    echo [FAIL] ÕÒ²»µ½ debug.keystore
     endlocal & exit /b 1
 )
 
-REM æŸ¥æ‰¾ apksigner.bat
+REM ²éÕÒ apksigner.bat
 set "APKSIGNER="
 for /f "delims=" %%d in ('dir /b "%ANDROID_HOME%\build-tools\" 2^>nul') do (
     if exist "%ANDROID_HOME%\build-tools\%%d\apksigner.bat" set "APKSIGNER=%ANDROID_HOME%\build-tools\%%d\apksigner.bat"
 )
 if "%APKSIGNER%"=="" (
-    echo [FAIL] æ‰¾ä¸åˆ° apksigner.bat
+    echo [FAIL] ÕÒ²»µ½ apksigner.bat
     endlocal & exit /b 1
 )
 
 "%APKSIGNER%" sign --ks "%DEBUG_KS%" --ks-pass pass:android --ks-key-alias androiddebugkey --key-pass pass:android --out "%FINAL_APK%" "%OUT_APK%" 2>nul
 if not exist "%FINAL_APK%" (
-    echo [FAIL] ç­¾åå¤±è´¥
+    echo [FAIL] Ç©ÃûÊ§°Ü
     endlocal & exit /b 1
 )
-echo   =^> ç­¾åå®Œæˆ
+echo   =^> Ç©ÃûÍê³É
 
-REM â”€â”€ æ­¥éª¤ 6: ADB å®‰è£… â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+REM ©¤©¤ ²½Öè 6: ADB °²×° ©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤©¤
 if not defined NO_INSTALL (
     echo.
-    echo [6/6] ADB å®‰è£…...
+    echo [6/6] ADB °²×°...
     adb devices 2>nul | findstr "device$" >nul
     if !errorlevel! neq 0 (
-        echo [WARN] æœªæ£€æµ‹åˆ° ADB è®¾å¤‡ï¼Œè·³è¿‡å®‰è£…
-        echo   APK ä½äºŽ: %FINAL_APK%
+        echo [WARN] Î´¼ì²âµ½ ADB Éè±¸£¬Ìø¹ý°²×°
+        echo   APK Î»ÓÚ: %FINAL_APK%
     ) else (
                 adb install -r "%FINAL_APK%"
         if !errorlevel! equ 0 (
-            echo [OK] å®‰è£…å®Œæˆ!
+            echo [OK] °²×°Íê³É!
         ) else (
-            echo [FAIL] å®‰è£…å¤±è´¥
+            echo [FAIL] °²×°Ê§°Ü
         )
     )
 )
 
 echo.
 echo ============================================================
-echo  å…¨éƒ¨å®Œæˆ!
+echo  È«²¿Íê³É!
 echo  APK: %FINAL_APK%
 echo ============================================================
 echo.
