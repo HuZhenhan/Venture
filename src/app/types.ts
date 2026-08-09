@@ -299,5 +299,5 @@ export interface APIConfig {
   hasApiKey: boolean;
   apiKeyPreview: string;
   models: AIModel[];
-  outputContextWindow: number;
+  inputContextWindow: number;
 }

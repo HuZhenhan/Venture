@@ -55,7 +55,7 @@ interface ProviderFormData {
   baseUrl: string;
   apiKey: string;
   models: AIModel[];
-  outputContextWindow: number;
+  inputContextWindow: number;
 }
 
 interface ProviderConfigModalProps {
@@ -496,7 +496,7 @@ export function ProviderConfigModal({
     baseUrl: '',
     apiKey: '',
     models: [{ id: '', name: '', enabled: true, supportsMultimodal: false }],
-    outputContextWindow: 2048,
+    inputContextWindow: 128,
   };
 
   const [formData, setFormData] = useState<ProviderFormData>(emptyForm);
@@ -510,7 +510,7 @@ export function ProviderConfigModal({
         models: config.models.length > 0
           ? config.models.map((model) => ({ ...model, supportsMultimodal: model.supportsMultimodal ?? false }))
           : [{ id: '', name: '', enabled: true, supportsMultimodal: false }],
-        outputContextWindow: config.outputContextWindow,
+        inputContextWindow: config.inputContextWindow,
       });
     } else {
       setFormData(emptyForm);
@@ -567,7 +567,7 @@ export function ProviderConfigModal({
             enabled: m.enabled,
             supportsMultimodal: m.supportsMultimodal ?? false,
           })),
-          outputContextWindow: formData.outputContextWindow,
+          inputContextWindow: formData.inputContextWindow,
         });
       } else {
         await addProvider({
@@ -580,7 +580,7 @@ export function ProviderConfigModal({
             enabled: m.enabled,
             supportsMultimodal: m.supportsMultimodal ?? false,
           })),
-          outputContextWindow: formData.outputContextWindow,
+          inputContextWindow: formData.inputContextWindow,
         });
       }
       await loadApiConfigs();
@@ -723,8 +723,8 @@ export function ProviderConfigModal({
                     <input
                       type="number"
                       min={256}
-                      value={formData.outputContextWindow}
-                      onChange={(e) => setFormData((p) => ({ ...p, outputContextWindow: parseInt(e.target.value) || 2048 }))}
+                      value={formData.inputContextWindow}
+                      onChange={(e) => setFormData((p) => ({ ...p, inputContextWindow: parseInt(e.target.value) || 128 }))}
                       className="w-full rounded-[20px] border-none bg-input-background px-4 py-3 text-[15px] font-medium outline-none transition-all focus:ring-4 focus:ring-primary/5"
                     />
                   </div>

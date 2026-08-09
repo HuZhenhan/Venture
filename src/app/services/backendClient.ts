@@ -1,10 +1,27 @@
 const FALLBACK_BASE_URL = 'http://127.0.0.1:49527';
 
+/** 等待后端就绪的最大重试次数/间隔（配合窗口先行：窗口先显示，后端就绪后自动连接） */
+const BACKEND_READY_MAX_RETRIES = 40;
+const BACKEND_READY_INTERVAL_MS = 300;
+
 let resolvedBaseUrl: string | null = null;
 
 export async function getBackendBaseUrl(): Promise<string> {
   if (resolvedBaseUrl) return resolvedBaseUrl;
   if (typeof window !== 'undefined' && window.desktopShell?.getBackendInfo) {
+    // Electron：窗口先行策略下后端可能尚未就绪，轮询 desktopShell 的 ready 标志，
+    // 就绪后立即返回（最多等 12s，超时仍返回 baseUrl 让调用方自行处理错误）。
+    for (let i = 0; i < BACKEND_READY_MAX_RETRIES; i += 1) {
+      try {
+        const info = await window.desktopShell.getBackendInfo();
+        if (info.ready) {
+          resolvedBaseUrl = info.baseUrl;
+          return resolvedBaseUrl;
+        }
+      } catch {
+      }
+      await new Promise((r) => setTimeout(r, BACKEND_READY_INTERVAL_MS));
+    }
     try {
       const info = await window.desktopShell.getBackendInfo();
       resolvedBaseUrl = info.baseUrl;

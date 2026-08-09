@@ -14,7 +14,7 @@ export interface AddProviderParams {
   baseUrl: string;
   apiKey: string;
   models: AIModel[];
-  outputContextWindow: number;
+  inputContextWindow: number;
 }
 
 export interface UpdateProviderParams {
@@ -22,7 +22,7 @@ export interface UpdateProviderParams {
   baseUrl?: string;
   apiKey?: string;
   models?: AIModel[];
-  outputContextWindow?: number;
+  inputContextWindow?: number;
 }
 
 export async function listProviders(): Promise<APIConfig[]> {

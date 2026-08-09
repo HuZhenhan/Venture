@@ -867,7 +867,12 @@ if (!gotTheLock) {
     console.log('[main] starting backend...');
     startBackend();
 
-    console.log('[main] waiting for backend...');
+    // 启动优化（窗口先行）：不再等待后端就绪才创建窗口。
+    // 窗口立即显示（前端 loading），后端就绪后前端经 desktopShell 轮询
+    // ready 标志自动连接，消除"双击 exe 停几秒才出窗口"的阻塞。
+    createMainWindow();
+
+    console.log('[main] waiting for backend (window already shown)...');
     backendReady = await waitForBackend();
 
     if (!backendReady) {
@@ -875,8 +880,6 @@ if (!gotTheLock) {
     } else {
       console.log('[main] backend ready ✓');
     }
-
-    createMainWindow();
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) {

@@ -54,12 +54,12 @@ struct AddProviderRequest {
     base_url: String,
     api_key: String,
     models: Vec<ModelEntry>,
-    #[serde(default = "default_output_context_window")]
-    output_context_window: u32,
+    #[serde(default = "default_input_context_window")]
+    input_context_window: u32,
 }
 
-fn default_output_context_window() -> u32 {
-    4096
+fn default_input_context_window() -> u32 {
+    128
 }
 
 #[derive(Debug, Deserialize)]
@@ -69,7 +69,7 @@ struct UpdateProviderRequest {
     base_url: Option<String>,
     api_key: Option<String>,
     models: Option<Vec<ModelEntry>>,
-    output_context_window: Option<u32>,
+    input_context_window: Option<u32>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -187,7 +187,7 @@ async fn add_provider(
         body.base_url,
         body.api_key,
         body.models,
-        body.output_context_window,
+        body.input_context_window,
     ).await?;
     Ok(Json(json!({ "provider": p })))
 }
@@ -203,7 +203,7 @@ async fn update_provider(
         body.base_url,
         body.api_key,
         body.models,
-        body.output_context_window,
+        body.input_context_window,
     ).await?;
     Ok(Json(json!({ "provider": p })))
 }

@@ -304,24 +304,52 @@ You have access to file system and task management tools through the standard fu
     // 超时仅作用于建连+首字节（tokio::time::timeout 包裹 send，响应头返回后即结束）；
     // 流式 body 总时长不受限——长推理可能持续数分钟，若用 reqwest 的 timeout() 会在
     // body 读取阶段超时，表现为 "error decoding response body"
-    let upstream_resp = tokio::time::timeout(
-        Duration::from_secs(60),
-        http.post(&endpoint)
-            .bearer_auth(&provider.api_key)
-            .json(&payload)
-            .send(),
-    )
-    .await
-    .map_err(|_| AppError::UpstreamTimeout)?
-    .map_err(|e| {
-        if e.is_timeout() {
-            AppError::UpstreamTimeout
-        } else if e.is_connect() {
-            AppError::UpstreamStreamError(format!("connection failed: {e}"))
-        } else {
-            AppError::UpstreamStreamError(e.to_string())
+    //
+    // 连接层失败（网络切换 ERR_NETWORK_CHANGED / 瞬时断连 / 超时等）自动重试，
+    // 网络不稳定时连接被重置，重试可自愈。仅对 send 阶段错误重试；
+    // 4xx/5xx 等 HTTP 错误是正常响应，走下方 status 分支不重试。
+    const MAX_RETRIES: u32 = 2;
+    let mut attempt: u32 = 0;
+    let upstream_resp = loop {
+        let result = tokio::time::timeout(
+            Duration::from_secs(60),
+            http.post(&endpoint)
+                .bearer_auth(&provider.api_key)
+                .json(&payload)
+                .send(),
+        )
+        .await;
+        match result {
+            Ok(Ok(resp)) => break resp,
+            Ok(Err(e)) => {
+                tracing::warn!(
+                    "upstream request failed: {endpoint} timeout={} connect={} decode={} redirect={} attempt={} err={}",
+                    e.is_timeout(),
+                    e.is_connect(),
+                    e.is_decode(),
+                    e.is_redirect(),
+                    attempt + 1,
+                    e
+                );
+                if attempt < MAX_RETRIES {
+                    attempt += 1;
+                    tokio::time::sleep(Duration::from_millis(500 * attempt as u64)).await;
+                    continue;
+                }
+                return Err(if e.is_timeout() {
+                    AppError::UpstreamTimeout
+                } else if e.is_connect() {
+                    AppError::UpstreamStreamError(format!("connection failed: {e}"))
+                } else {
+                    AppError::UpstreamStreamError(e.to_string())
+                });
+            }
+            Err(_) => {
+                tracing::warn!("upstream request timeout (60s): {endpoint}");
+                return Err(AppError::UpstreamTimeout);
+            }
         }
-    })?;
+    };
 
     let status = upstream_resp.status();
     if status == 401 || status == 403 {

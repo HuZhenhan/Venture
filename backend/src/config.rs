@@ -29,12 +29,13 @@ pub struct ProviderRecord {
     pub base_url: String,
     pub api_key: String,
     pub models: Vec<ModelEntry>,
-    #[serde(default = "default_output_context_window")]
-    pub output_context_window: u32,
+    // alias：兼容旧配置文件中 "outputContextWindow" 字段名（2026-08 统一改名）
+    #[serde(default = "default_input_context_window", alias = "outputContextWindow")]
+    pub input_context_window: u32,
 }
 
-fn default_output_context_window() -> u32 {
-    4096
+fn default_input_context_window() -> u32 {
+    128
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,7 +47,7 @@ pub struct ProviderPublic {
     pub has_api_key: bool,
     pub api_key_preview: String,
     pub models: Vec<ModelEntry>,
-    pub output_context_window: u32,
+    pub input_context_window: u32,
 }
 
 impl From<&ProviderRecord> for ProviderPublic {
@@ -69,7 +70,7 @@ impl From<&ProviderRecord> for ProviderPublic {
             has_api_key: !r.api_key.is_empty(),
             api_key_preview: preview,
             models: r.models.clone(),
-            output_context_window: r.output_context_window,
+            input_context_window: r.input_context_window,
         }
     }
 }
@@ -202,7 +203,7 @@ fn merge_legacy_provider_config(state: &mut ConfigFile, data_dir: &PathBuf) -> b
 fn validate_provider_input(
     base_url: &str,
     models: &[ModelEntry],
-    output_context_window: u32,
+    input_context_window: u32,
 ) -> Result<(), AppError> {
     if base_url.trim().is_empty() {
         return Err(AppError::InvalidProviderConfig("base_url is required".into()));
@@ -241,9 +242,10 @@ fn validate_provider_input(
         }
     }
 
-    if output_context_window == 0 || output_context_window > 128_000 {
+    // 单位为 K tokens；无上限（不校验最大值），仅拒绝 0（无意义值）
+    if input_context_window == 0 {
         return Err(AppError::InvalidProviderConfig(
-            "outputContextWindow must be in [1, 128000]".into(),
+            "inputContextWindow must be >= 1".into(),
         ));
     }
     Ok(())
@@ -354,19 +356,19 @@ impl ConfigStore {
         base_url: String,
         api_key: String,
         models: Vec<ModelEntry>,
-        output_context_window: u32,
+        input_context_window: u32,
     ) -> Result<ProviderPublic, AppError> {
         if name.trim().is_empty() {
             return Err(AppError::InvalidProviderConfig("name is required".into()));
         }
-        validate_provider_input(&base_url, &models, output_context_window)?;
+        validate_provider_input(&base_url, &models, input_context_window)?;
         let record = ProviderRecord {
             id: Uuid::new_v4().to_string(),
             name,
             base_url,
             api_key,
             models,
-            output_context_window,
+            input_context_window,
         };
         let public = ProviderPublic::from(&record);
         {
@@ -384,7 +386,7 @@ impl ConfigStore {
         base_url: Option<String>,
         api_key: Option<String>,
         models: Option<Vec<ModelEntry>>,
-        output_context_window: Option<u32>,
+        input_context_window: Option<u32>,
     ) -> Result<ProviderPublic, AppError> {
         let public = {
             let mut state = self.state.write().await;
@@ -397,7 +399,7 @@ impl ConfigStore {
             // 先构造预期的最终值再校验
             let next_base_url = base_url.clone().unwrap_or_else(|| record.base_url.clone());
             let next_models = models.clone().unwrap_or_else(|| record.models.clone());
-            let next_output = output_context_window.unwrap_or(record.output_context_window);
+            let next_output = input_context_window.unwrap_or(record.input_context_window);
             validate_provider_input(&next_base_url, &next_models, next_output)?;
 
             if let Some(n) = name {
@@ -416,8 +418,8 @@ impl ConfigStore {
             if let Some(m) = models {
                 record.models = m;
             }
-            if let Some(w) = output_context_window {
-                record.output_context_window = w;
+            if let Some(w) = input_context_window {
+                record.input_context_window = w;
             }
             ProviderPublic::from(&*record)
         };
