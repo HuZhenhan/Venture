@@ -1,5 +1,6 @@
 package com.venture.app.bridge
 
+import android.content.Context
 import android.util.Log
 import org.json.JSONObject
 import java.io.BufferedInputStream
@@ -19,10 +20,17 @@ import java.util.concurrent.atomic.AtomicBoolean
  *   POST http://127.0.0.1:46307/tool   { "tool": "click", "args": {...} }
  *     → { "ok": true, ... } / { "ok": false, "error": { "code", "message" } }
  *   GET  http://127.0.0.1:46307/health → { "ok": true, "service": "...", "operational": bool }
+ *   POST http://127.0.0.1:46307/keepalive { "action": "pulse"|"start"|"heartbeat"|"stop", "text": "..." }
+ *     → 后台保活前台服务控制（Rust 后端任务生命周期挂钩；pulse = 幂等启动+续期）
+ *   POST http://127.0.0.1:46307/overlay { "action": "thinking"|"streaming"|"tool"|"hide", "text": "..." }
+ *     → AI 活动悬浮窗（thinking 动画 / 流式回复 / 工具分类 / 隐藏）
+ *   POST http://127.0.0.1:46307/approval { "action": "show"|"hide", "payload": {...} }
+ *     → 授权悬浮窗（屏幕下方工具授权卡片；用户点击结果回传后端 /api/approval/result）
  *
  * 仅绑定 127.0.0.1，不对外暴露。请求体按 Content-Length 读取（不支持 chunked，后端不会用）。
  */
 class ToolServer(
+    context: Context,
     private val port: Int = PORT,
     private val handler: (tool: String, args: JSONObject) -> JSONObject,
 ) {
@@ -36,12 +44,21 @@ class ToolServer(
         var instance: ToolServer? = null
             private set
 
+        /** 应用上下文（VentureKeepAliveService 等无 context 场景使用） */
+        @Volatile
+        var appContext: Context? = null
+            private set
+
         /** 幂等启动（MainActivity.onCreate 调用） */
-        fun ensureStarted(handler: (tool: String, args: JSONObject) -> JSONObject): ToolServer {
+        fun ensureStarted(
+            context: Context,
+            handler: (tool: String, args: JSONObject) -> JSONObject,
+        ): ToolServer {
             instance?.let { return it }
             synchronized(this) {
                 instance?.let { return it }
-                val server = ToolServer(PORT, handler)
+                appContext = context.applicationContext
+                val server = ToolServer(context, PORT, handler)
                 server.start()
                 instance = server
                 return server
@@ -80,32 +97,124 @@ class ToolServer(
     private fun handle(client: Socket) {
         client.soTimeout = 15_000
         client.use { sock ->
-            val input = BufferedInputStream(sock.getInputStream())
-            val output = sock.getOutputStream()
-
-            // 请求行
-            val requestLine = readLine(input) ?: return
-            val parts = requestLine.split(" ")
-            if (parts.size < 2) return respond(output, 400, errorJson("bad_request", "malformed request line"))
-            val method = parts[0].uppercase()
-            val path = parts[1].substringBefore('?')
-
-            // 头
-            var contentLength = 0
-            while (true) {
-                val line = readLine(input) ?: break
-                if (line.isEmpty()) break
-                val idx = line.indexOf(':')
-                if (idx > 0) {
-                    val name = line.substring(0, idx).trim().lowercase()
-                    val value = line.substring(idx + 1).trim()
-                    if (name == "content-length") contentLength = value.toIntOrNull() ?: 0
+            try {
+                handleRequest(sock)
+            } catch (e: Exception) {
+                // 兜底：任何异常都尝试返回 JSON 错误而不是静默关闭连接——
+                // 无响应会让客户端（reqwest）报 "error decoding response body"
+                Log.e(TAG, "handle failed: ${e.javaClass.simpleName}: ${e.message}")
+                runCatching {
+                    respond(
+                        sock.getOutputStream(), 500,
+                        errorJson("internal_error", e.message ?: e.javaClass.simpleName)
+                    )
                 }
             }
+        }
+    }
+
+    private fun handleRequest(sock: Socket) {
+        val input = BufferedInputStream(sock.getInputStream())
+        val output = sock.getOutputStream()
+
+        // 请求行
+        val requestLine = readLine(input) ?: return
+        val parts = requestLine.split(" ")
+        if (parts.size < 2) return respond(output, 400, errorJson("bad_request", "malformed request line"))
+        val method = parts[0].uppercase()
+        val path = parts[1].substringBefore('?')
+
+        // 头
+        var contentLength = 0
+        var expectContinue = false
+        while (true) {
+            val line = readLine(input) ?: break
+            if (line.isEmpty()) break
+            val idx = line.indexOf(':')
+            if (idx > 0) {
+                val name = line.substring(0, idx).trim().lowercase()
+                val value = line.substring(idx + 1).trim()
+                if (name == "content-length") contentLength = value.toIntOrNull() ?: 0
+                if (name == "expect" && value.contains("100-continue")) expectContinue = true
+            }
+        }
+
+        // reqwest 对大 body（>1KB）默认发送 Expect: 100-continue 并等待 100 响应；
+        // 若不响应，客户端一直等 100、服务器一直等 body → 死锁到 soTimeout 超时，
+        // 表现为客户端 "error decoding response body"。头部结束后立即回 100。
+        if (expectContinue && contentLength > 0) {
+            output.write("HTTP/1.1 100 Continue\r\n\r\n".toByteArray(Charsets.UTF_8))
+            output.flush()
+        }
 
             when {
                 method == "GET" && path == "/health" -> {
                     respond(output, 200, handler("__health__", JSONObject()))
+                }
+                method == "POST" && path == "/keepalive" -> {
+                    val body = readBody(input, contentLength)
+                    val payload = runCatching { JSONObject(String(body, Charsets.UTF_8)) }.getOrNull()
+                    val action = payload?.optString("action", "") ?: ""
+                    val text = payload?.optString("text", "").orEmpty()
+                    val ctx = appContext
+                    if (ctx == null) {
+                        respond(output, 200, JSONObject().put("ok", false).put("error",
+                            JSONObject().put("code", "no_context").put("message", "ToolServer 未初始化")))
+                    } else if (action !in setOf("pulse", "start", "heartbeat", "stop")) {
+                        respond(output, 400, JSONObject().put("ok", false).put("error",
+                            JSONObject().put("code", "bad_request").put("message", "unknown action: $action")))
+                    } else {
+                        when (action) {
+                            // pulse：幂等启动 + 续期（Rust 后端任务活动信号，停止靠空闲超时）
+                            "pulse" -> VentureKeepAliveService.ensureStarted(ctx, text.ifEmpty { "任务执行中…" })
+                            "start" -> VentureKeepAliveService.ensureStarted(ctx, text.ifEmpty { "任务执行中…" })
+                            "heartbeat" -> VentureKeepAliveService.heartbeat(text.ifEmpty { null })
+                            "stop" -> VentureKeepAliveService.stop(ctx)
+                        }
+                        respond(output, 200, JSONObject().put("ok", true).put("active", VentureKeepAliveService.active))
+                    }
+                }
+                method == "POST" && path == "/overlay" -> {
+                    val body = readBody(input, contentLength)
+                    val payload = runCatching { JSONObject(String(body, Charsets.UTF_8)) }.getOrNull()
+                    val action = payload?.optString("action", "") ?: ""
+                    val text = payload?.optString("text", "").orEmpty()
+                    val ctx = appContext
+                    if (ctx == null) {
+                        respond(output, 200, JSONObject().put("ok", false).put("error",
+                            JSONObject().put("code", "no_context").put("message", "ToolServer 未初始化")))
+                    } else if (action !in setOf("thinking", "streaming", "tool", "hide")) {
+                        respond(output, 400, JSONObject().put("ok", false).put("error",
+                            JSONObject().put("code", "bad_request").put("message", "unknown action: $action")))
+                    } else {
+                        when (action) {
+                            "thinking" -> OverlayWindowManager.showThinking(ctx)
+                            "streaming" -> OverlayWindowManager.showStreaming(ctx, text)
+                            "tool" -> OverlayWindowManager.showTool(ctx, text.ifEmpty { "AI 正在使用工具" })
+                            "hide" -> OverlayWindowManager.hide(ctx)
+                        }
+                        respond(output, 200, JSONObject().put("ok", true))
+                    }
+                }
+                method == "POST" && path == "/approval" -> {
+                    val body = readBody(input, contentLength)
+                    val payload = runCatching { JSONObject(String(body, Charsets.UTF_8)) }.getOrNull()
+                    val action = payload?.optString("action", "") ?: ""
+                    val data = payload?.optJSONObject("payload") ?: JSONObject()
+                    val ctx = appContext
+                    if (ctx == null) {
+                        respond(output, 200, JSONObject().put("ok", false).put("error",
+                            JSONObject().put("code", "no_context").put("message", "ToolServer 未初始化")))
+                    } else if (action !in setOf("show", "hide")) {
+                        respond(output, 400, JSONObject().put("ok", false).put("error",
+                            JSONObject().put("code", "bad_request").put("message", "unknown action: $action")))
+                    } else {
+                        when (action) {
+                            "show" -> ApprovalOverlayWindowManager.show(ctx, data)
+                            "hide" -> ApprovalOverlayWindowManager.hide(ctx)
+                        }
+                        respond(output, 200, JSONObject().put("ok", true))
+                    }
                 }
                 method == "POST" && path == "/tool" -> {
                     if (contentLength <= 0 || contentLength > MAX_BODY_BYTES) {
@@ -132,7 +241,18 @@ class ToolServer(
                 }
                 else -> respond(output, 404, errorJson("not_found", "unknown path: $path"))
             }
+    }
+
+    private fun readBody(input: BufferedInputStream, contentLength: Int): ByteArray {
+        if (contentLength <= 0 || contentLength > MAX_BODY_BYTES) return ByteArray(0)
+        val body = ByteArray(contentLength)
+        var read = 0
+        while (read < contentLength) {
+            val n = input.read(body, read, contentLength - read)
+            if (n < 0) break
+            read += n
         }
+        return body.copyOf(read)
     }
 
     private fun readLine(input: BufferedInputStream): String? {

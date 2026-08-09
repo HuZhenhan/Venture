@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import com.venture.app.bridge.NativeToolBridge
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
@@ -99,6 +100,9 @@ class VentureAccessibilityService : AccessibilityService() {
             flags = flags or AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
             flags = flags or AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
         }
+        // 自愈：进程被杀后系统重启本服务（新进程），恢复工具桥，
+        // 使自动化能力在用户重新打开应用前即可用，也借此保住进程优先级。
+        runCatching { NativeToolBridge.recoverIfNeeded(this) }
         LOCK.withLock { ENABLED.signalAll() }
     }
 

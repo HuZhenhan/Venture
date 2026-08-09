@@ -42,7 +42,8 @@ import {
   selectShowTestButton,
   selectShowLayoutDebug,
   selectIsRightRailOpen,
-  useLayoutStore 
+  selectToggleRightRail,
+  useLayoutStore
 } from '../store/useLayoutStore';
 import { AMBIENT_BG, RIGHT_RAIL_WIDTH, APPLE_CURVE, DURATION, PANEL_TRANSITION } from '../constants';
 import { resolveAdaptivePanelVisibility, resolveRailState } from '../utils/layoutPanels';
@@ -82,6 +83,7 @@ export function MainLayout() {
   const showTestButton = useLayoutStore(selectShowTestButton);
   const showLayoutDebug = useLayoutStore(selectShowLayoutDebug);
   const isRightRailOpen = useLayoutStore(selectIsRightRailOpen);
+  const toggleRightRail = useLayoutStore(selectToggleRightRail);
 
   const handleResize = useCallback(() => {
     setViewportWidth(window.innerWidth);
@@ -170,6 +172,20 @@ export function MainLayout() {
   const handleToggleScripts = useCallback(() => toggleScripts(), [toggleScripts]);
   const handleToggleSkills = useCallback(() => toggleSkills(), [toggleSkills]);
 
+  // 点击左侧主区域任意位置：右栏展开时折叠，模拟"点空白处收起侧栏"的移动端交互。
+  // 按钮点击由按钮自身处理，不在此触发折叠，避免误关右栏开关/模式切换等控件。
+  const handleMainAreaClick = useCallback((event: React.MouseEvent) => {
+    if (!isRightRailOpen) return;
+    if ((event.target as HTMLElement).closest('button')) return;
+    toggleRightRail();
+  }, [isRightRailOpen, toggleRightRail]);
+
+  // 左上角切换对话按钮：若右栏已展开则一并收起，避免左右面板同屏挤占空间。
+  const handleToggleSidebar = useCallback(() => {
+    if (isRightRailOpen) toggleRightRail();
+    toggleSidebar();
+  }, [isRightRailOpen, toggleRightRail, toggleSidebar]);
+
   // ── Lazy panel mounting ──────────────────────────────────────────────────────
   // Panels that have never been opened are NOT mounted in the DOM, saving initial
   // render cost. Once opened for the first time, they stay mounted (but hidden)
@@ -203,7 +219,7 @@ export function MainLayout() {
           className={`absolute z-50 ${__IS_ELECTRON__ ? 'no-drag' : ''}`}
         >
           <div className="flex items-center gap-2">
-            <SidebarToggleButton isOpen={isSidebarOpen} onClick={toggleSidebar} />
+            <SidebarToggleButton isOpen={isSidebarOpen} onClick={handleToggleSidebar} />
             {showTestButton && (
               <motion.button
                 initial={{ opacity: 0, scale: 0.8 }}
@@ -239,7 +255,7 @@ export function MainLayout() {
           <Sidebar />
         </div>
 
-        <div className="flex-1 flex flex-col overflow-hidden relative">
+        <div className="flex-1 flex flex-col overflow-hidden relative" onClick={handleMainAreaClick}>
           <div>
             <ChatHeader />
           </div>
@@ -355,6 +371,7 @@ export function MainLayout() {
           </motion.div>
 
           <motion.div
+            onClick={(event) => event.stopPropagation()}
             className={`absolute right-0 top-0 bottom-0 z-50 flex h-full shrink-0 bg-background overflow-hidden ${
               isRightRailOpen ? 'border-l border-border shadow-[-12px_0_32px_-24px_rgba(0,0,0,0.3)]' : ''
             }`}

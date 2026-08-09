@@ -35,6 +35,7 @@ pub const NATIVE_TOOLS: &[&str] = &[
     "wait_for_text",
     "wait_for_app",
     "sleep",
+    "stop_app",
 ];
 
 /// 脚本类工具（由 script 模块处理）
@@ -53,7 +54,7 @@ pub fn all_tool_schemas() -> Vec<Value> {
 
     // ── 感知类（6.1） ──────────────────────────────────────────────
     push("screenshot", "截取当前屏幕。用于多模态视觉分析。返回图片路径（PNG）", empty_obj());
-    push("get_layout", "获取当前屏幕布局树（节点含坐标/文本/actions）。mode=brief 为压缩版（默认）；full 为完整树（可能很大）；subagent 为子代理提取模式（仅保留接口）", json!({
+    push("get_layout", "获取当前屏幕布局。mode=brief（默认）为行式 DSL 文本（text 字段，含 id/role/desc/坐标/fid/state/scroll 方向，省 token），附 rev 版本号（页面是否变化对比 rev）；full 为完整 JSON 树（可能很大）；subagent 为子代理提取模式（仅保留接口）。动作类工具（click/node_action/scroll/paste 等）可携带 rev 校验页面未变", json!({
         "type": "object",
         "properties": { "mode": { "type": "string", "enum": ["brief", "full", "subagent"], "default": "brief" } },
         "required": []
@@ -82,7 +83,8 @@ pub fn all_tool_schemas() -> Vec<Value> {
         "type": "object",
         "properties": {
             "node_id": { "type": "integer", "description": "get_layout 返回的节点编号（优先）" },
-            "x": { "type": "integer" }, "y": { "type": "integer" }
+            "x": { "type": "integer" }, "y": { "type": "integer" },
+            "rev": { "type": "string", "description": "可选：最近一次 get_layout 返回的 rev；不匹配则拒绝执行并提示重新观察" }
         },
         "required": []
     });
@@ -119,7 +121,8 @@ pub fn all_tool_schemas() -> Vec<Value> {
                 "paste","focus","clearFocus","select","clearSelection","expand","collapse","dismiss",
                 "show","setProgress","moveWindow","imeEnter","pressAndHold","contextClick"] },
             "text": { "type": "string", "description": "setText 时必填" },
-            "args": { "type": "object", "description": "其他动作参数" }
+            "args": { "type": "object", "description": "其他动作参数" },
+            "rev": { "type": "string", "description": "可选：最近一次 get_layout 返回的 rev；不匹配则拒绝执行" }
         },
         "required": ["node_id", "action"]
     }));
@@ -130,7 +133,10 @@ pub fn all_tool_schemas() -> Vec<Value> {
     }));
     push("paste", "向指定节点粘贴剪贴板内容（传 text 时先写剪贴板再粘贴）。微信/QQ 输入首选", json!({
         "type": "object",
-        "properties": { "node_id": { "type": "integer" }, "text": { "type": "string" } },
+        "properties": {
+            "node_id": { "type": "integer" }, "text": { "type": "string" },
+            "rev": { "type": "string", "description": "可选：最近一次 get_layout 返回的 rev；不匹配则拒绝执行" }
+        },
         "required": []
     }));
     push("key_event", "按键注入", json!({
@@ -163,7 +169,8 @@ pub fn all_tool_schemas() -> Vec<Value> {
         "properties": {
             "direction": { "type": "string", "enum": ["up","down","left","right"] },
             "node_id": { "type": "integer" },
-            "times": { "type": "integer", "default": 1 }
+            "times": { "type": "integer", "default": 1 },
+            "rev": { "type": "string", "description": "可选：最近一次 get_layout 返回的 rev；不匹配则拒绝执行" }
         },
         "required": ["direction"]
     }));
@@ -184,6 +191,11 @@ pub fn all_tool_schemas() -> Vec<Value> {
             "timeout_ms": { "type": "integer", "default": 10000 }
         },
         "required": ["text"]
+    }));
+    push("stop_app", "停止指定应用（结束其进程）。用于 Run_script 执行前清理干扰软件（弹窗/抢占前台的第三方应用）。参数 package_name 为应用包名（如 com.tencent.mm）。仅支持 root 路径（am force-stop）；设备未 root 时返回 root_required 错误，此时需提示用户手动关闭目标应用后再继续", json!({
+        "type": "object",
+        "properties": { "package_name": { "type": "string", "description": "要停止的应用包名" } },
+        "required": ["package_name"]
     }));
     push("wait_for_app", "等待前台切换到指定应用（支持包名或应用名）", json!({
         "type": "object",

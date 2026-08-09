@@ -203,7 +203,7 @@ impl<'a> Interpreter<'a> {
                     }
                     let re = regex::Regex::new(text).map_err(|e| ScriptError(format!("谓词正则非法: {e}")))?;
                     let mut texts = Vec::new();
-                    collect_texts(&layout["root"], &mut texts);
+                    collect_texts(&layout, &mut texts);
                     Ok(texts.iter().any(|t| re.is_match(t)))
                 } else {
                     let res = self
@@ -321,11 +321,17 @@ impl<'a> Interpreter<'a> {
                     self.vars.insert(var.to_string(), res);
                 }
             }
+            // 停止指定应用（Run_script 前清理干扰软件）
+            "stop_app" => {
+                let res = self.tools.call("stop_app", args).await;
+                check_ok(&res, "stop_app")?;
+            }
             "get_layout" => {
                 let res = self.tools.call("get_layout", args).await;
                 check_ok(&res, "get_layout")?;
                 if let Some(var) = save_to {
-                    self.vars.insert(var.to_string(), res["root"].clone());
+                    // v3：布局为行式 DSL 文本（text 字段）
+                    self.vars.insert(var.to_string(), res["text"].clone());
                 }
             }
             "get_node" | "read_node" => {
@@ -491,20 +497,55 @@ fn pick_fields(node: &Value, fields: &Value) -> Value {
     Value::Object(out)
 }
 
-fn collect_texts(node: &Value, out: &mut Vec<String>) {
-    if let Some(t) = node["text"].as_str() {
-        if !t.is_empty() {
-            out.push(t.to_string());
+/// 从 v3 行式 DSL 布局文本中提取全部 desc（chrome/offscreen/list item/sub 行）。
+/// 行格式：<id> <role> <desc> [@x,y] [#fid] [*state] [reason:xxx]；
+/// desc 含空格时用双引号包裹（\" 转义），否则为裸 token。
+fn collect_texts(dsl: &Value, out: &mut Vec<String>) {
+    let Some(text) = dsl["text"].as_str() else { return };
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty()
+            || line.starts_with("---")
+            || line.starts_with("screen ")
+            || line.starts_with('+')
+            || line.starts_with('-')
+        {
+            continue;
         }
-    }
-    if let Some(d) = node["desc"].as_str() {
-        if !d.is_empty() {
-            out.push(d.to_string());
+        // 跳过 id 与 role 两个字段，取 desc
+        let rest = line.splitn(3, ' ').nth(2).unwrap_or("");
+        let rest = rest.trim_start();
+        if rest.is_empty() {
+            continue;
         }
-    }
-    if let Some(children) = node["children"].as_array() {
-        for c in children {
-            collect_texts(c, out);
+        if rest.starts_with('"') {
+            // 引号包裹：读取到配对引号，处理 \" 转义
+            let mut desc = String::new();
+            let mut escaped = false;
+            for ch in rest[1..].chars() {
+                if escaped {
+                    desc.push(ch);
+                    escaped = false;
+                } else if ch == '\\' {
+                    escaped = true;
+                } else if ch == '"' {
+                    break;
+                } else {
+                    desc.push(ch);
+                }
+            }
+            if !desc.is_empty() {
+                out.push(desc);
+            }
+        } else {
+            // 裸 token：到空白或标记符（@ # * reason:）为止
+            let end = rest
+                .find(|c: char| c.is_whitespace() || c == '@' || c == '#' || c == '*')
+                .unwrap_or(rest.len());
+            let t = rest[..end].trim();
+            if !t.is_empty() {
+                out.push(t.to_string());
+            }
         }
     }
 }

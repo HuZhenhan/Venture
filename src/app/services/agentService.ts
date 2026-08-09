@@ -27,7 +27,7 @@ export const AGENT_TOOL_NAMES = new Set([
   'click', 'long_click', 'press', 'swipe', 'gesture', 'node_action', 'input_text',
   'paste', 'key_event', 'global_action', 'set_clipboard', 'launch_app', 'open_url', 'scroll',
   // 控制
-  'wait_for_node', 'wait_for_text', 'wait_for_app', 'sleep',
+  'wait_for_node', 'wait_for_text', 'wait_for_app', 'sleep', 'stop_app',
   // 确认/进度
   'report_progress',
   // 脚本
@@ -171,6 +171,56 @@ export async function openAccessibilitySettings(): Promise<void> {
 
 export async function getAgentBridgeHealth(): Promise<{ ok: boolean; service_connected?: boolean; operational?: boolean }> {
   return backendGet<{ ok: boolean; service_connected?: boolean; operational?: boolean }>('/api/agent/health');
+}
+
+// ─── 后台保活（电池优化白名单引导） ──────────────────────────────────────────
+
+export interface KeepAliveStatus {
+  ok: boolean;
+  /** 是否已豁免电池优化 */
+  exempt?: boolean;
+  /** 前台保活服务是否运行中 */
+  active?: boolean;
+  error?: { code: string; message: string };
+}
+
+/** 保活状态（电池优化豁免 + 前台服务活动） */
+export async function getKeepAliveStatus(): Promise<KeepAliveStatus> {
+  return backendGet<KeepAliveStatus>('/api/agent/keepalive/status');
+}
+
+/** 请求电池优化豁免（弹系统对话框） */
+export async function requestBatteryExempt(): Promise<KeepAliveStatus> {
+  return backendPost<KeepAliveStatus>('/api/agent/keepalive/request-exempt', {});
+}
+
+/** 打开电池优化设置页（用户手动选"不受限制"） */
+export async function openBatterySettings(): Promise<KeepAliveStatus> {
+  return backendPost<KeepAliveStatus>('/api/agent/keepalive/open-settings', {});
+}
+
+// ─── AI 活动悬浮窗权限 ─────────────────────────────────────────────────────
+
+export interface OverlayPermissionState {
+  ok: boolean;
+  /** 是否已授予悬浮窗权限（SYSTEM_ALERT_WINDOW） */
+  granted?: boolean;
+  error?: { code: string; message: string };
+}
+
+/** 悬浮窗权限状态 */
+export async function getOverlayPermission(): Promise<OverlayPermissionState> {
+  return backendGet<OverlayPermissionState>('/api/agent/overlay/permission');
+}
+
+/** 打开悬浮窗权限授权页 */
+export async function openOverlaySettings(): Promise<OverlayPermissionState> {
+  return backendPost<OverlayPermissionState>('/api/agent/overlay/open-settings', {});
+}
+
+/** 主动关闭悬浮窗（停止按钮/异常中断时调用，防止状态残留） */
+export async function hideOverlay(): Promise<void> {
+  await backendPost('/api/agent/overlay/hide', {});
 }
 
 // ─── 脚本管理（DSL §12） ─────────────────────────────────────────────────────

@@ -15,6 +15,9 @@ import {
   Accessibility,
   ChevronDown,
   FileJson,
+  BatteryCharging,
+  MonitorPlay,
+  X,
 } from 'lucide-react';
 import { APPLE_CURVE } from '../../constants';
 import { useAgentStore } from '../../store/agentState';
@@ -22,11 +25,18 @@ import {
   deleteScript,
   exportScriptText,
   getAccessibilityPermission,
+  getKeepAliveStatus,
+  getOverlayPermission,
   importScript,
   openAccessibilitySettings,
+  openBatterySettings,
+  openOverlaySettings,
+  requestBatteryExempt,
   runScript,
   setScriptEnabled,
   type AccessibilityPermissionState,
+  type KeepAliveStatus,
+  type OverlayPermissionState,
   type ScriptSummary,
 } from '../../services/agentService';
 
@@ -113,6 +123,172 @@ function PermissionBanner() {
           >
             去开启
           </motion.button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * 权限卡片通用逻辑：已授权 → 简化显示（无说明文字）+ 右侧 × 关闭；
+ * 权限重新缺失后再授权会再次显示（× 隐藏仅当次生效）。
+ */
+function usePermissionCard<T extends { ok?: boolean }>(
+  poll: () => Promise<T>,
+  isGranted: (s: T) => boolean,
+) {
+  const [status, setStatus] = React.useState<T | null>(null);
+  const [hidden, setHidden] = React.useState(false);
+  const prevGranted = React.useRef<boolean | undefined>(undefined);
+
+  const refresh = React.useCallback(async () => {
+    try {
+      setStatus(await poll());
+    } catch {
+      setStatus(null);
+    }
+  }, [poll]);
+
+  React.useEffect(() => {
+    void refresh();
+    const timer = window.setInterval(refresh, 5000);
+    return () => window.clearInterval(timer);
+  }, [refresh]);
+
+  // 权限从缺失 → 已授权：重置 × 隐藏（前一次关闭失效）
+  React.useEffect(() => {
+    if (!status || !status.ok) return;
+    const granted = isGranted(status);
+    if (prevGranted.current === false && granted) setHidden(false);
+    prevGranted.current = granted;
+  }, [status, isGranted]);
+
+  const visible = !!status && status.ok === true && !hidden;
+  return {
+    status,
+    visible,
+    granted: status ? isGranted(status) : false,
+    hide: () => setHidden(true),
+    refresh,
+  };
+}
+
+/** 已授权简化状态行（绿卡 + ×） */
+function GrantedRow({ icon, title, onClose }: { icon: React.ReactNode; title: string; onClose: () => void }) {
+  return (
+    <div className="relative bg-emerald-500/[0.06] border border-emerald-500/20 rounded-[20px] py-2.5 pl-3.5 pr-10">
+      <div className="flex items-center gap-2.5">
+        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[10px] bg-emerald-500/10 text-emerald-500">
+          {icon}
+        </div>
+        <div className="text-[12px] font-semibold text-foreground">{title}</div>
+      </div>
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="关闭此提示"
+        className="absolute right-2.5 top-1/2 -translate-y-1/2 flex h-6 w-6 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:bg-muted/60 hover:text-foreground"
+      >
+        <X size={13} />
+      </button>
+    </div>
+  );
+}
+
+/**
+ * 后台保活引导（电池优化白名单）。
+ * - 桥不可达（非 Android / 后端未启动）时不显示
+ * - 已豁免 → 简化状态行（+ × 关闭）
+ * - 未豁免 → 引导卡：一键豁免 / 打开设置（国产 ROM 还需手动允许自启动）
+ */
+function KeepAliveBanner() {
+  const { visible, granted, hide, refresh } = usePermissionCard<KeepAliveStatus>(
+    getKeepAliveStatus,
+    (s) => s.exempt === true,
+  );
+
+  if (!visible) return null;
+
+  if (granted) {
+    return <GrantedRow icon={<BatteryCharging size={15} />} title="后台保活已优化" onClose={hide} />;
+  }
+
+  return (
+    <div className="bg-amber-500/[0.06] border border-amber-500/20 rounded-[20px] p-4">
+      <div className="flex items-start gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[14px] bg-amber-500/10 text-amber-500">
+          <BatteryCharging size={17} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[13px] font-semibold text-foreground">开启后台保活</div>
+          <div className="text-[11px] text-muted-foreground mt-0.5 leading-relaxed">
+            任务进行中退到后台时，免电池优化可显著降低被系统清理的概率（华为/小米等系统还需在应用管理中允许"自启动/后台运行"）。
+          </div>
+          <div className="flex items-center gap-2 mt-3">
+            <motion.button
+              type="button"
+              whileTap={{ scale: 0.96 }}
+              transition={{ duration: 0.15, ease: APPLE_CURVE }}
+              onClick={() => void requestBatteryExempt().then(refresh)}
+              className="rounded-full bg-amber-500 px-3.5 py-1.5 text-[11px] font-semibold text-white shadow-sm"
+            >
+              一键豁免
+            </motion.button>
+            <motion.button
+              type="button"
+              whileTap={{ scale: 0.96 }}
+              transition={{ duration: 0.15, ease: APPLE_CURVE }}
+              onClick={() => void openBatterySettings().then(refresh)}
+              className="rounded-full border border-border px-3.5 py-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              手动设置
+            </motion.button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * AI 活动悬浮窗权限引导。
+ * - 未授权 → 引导卡（去开启悬浮窗权限）
+ * - 已授权 → 简化状态行（+ × 关闭）
+ */
+function OverlayBanner() {
+  const { visible, granted, hide, refresh } = usePermissionCard<OverlayPermissionState>(
+    getOverlayPermission,
+    (s) => s.granted === true,
+  );
+
+  if (!visible) return null;
+
+  if (granted) {
+    return <GrantedRow icon={<MonitorPlay size={15} />} title="AI 活动悬浮窗已开启" onClose={hide} />;
+  }
+
+  return (
+    <div className="bg-amber-500/[0.06] border border-amber-500/20 rounded-[20px] p-4">
+      <div className="flex items-start gap-3">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[14px] bg-amber-500/10 text-amber-500">
+          <MonitorPlay size={17} />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="text-[13px] font-semibold text-foreground">开启 AI 活动悬浮窗</div>
+          <div className="text-[11px] text-muted-foreground mt-0.5 leading-relaxed">
+            在屏幕上部实时显示 AI 正在做什么（思考动画 / 回复内容 / 工具操作），无需打开应用即可了解任务进度。
+          </div>
+          <div className="flex items-center gap-2 mt-3">
+            <motion.button
+              type="button"
+              whileTap={{ scale: 0.96 }}
+              transition={{ duration: 0.15, ease: APPLE_CURVE }}
+              onClick={() => void openOverlaySettings().then(refresh)}
+              className="rounded-full bg-amber-500 px-3.5 py-1.5 text-[11px] font-semibold text-white shadow-sm"
+            >
+              去开启
+            </motion.button>
+          </div>
         </div>
       </div>
     </div>
@@ -374,6 +550,12 @@ export function ScriptPanel({ width = 400 }: ScriptPanelProps) {
 
           {/* 无障碍权限引导（规格书 8.3） */}
           <PermissionBanner />
+
+          {/* 后台保活引导（电池优化白名单） */}
+          <KeepAliveBanner />
+
+          {/* AI 活动悬浮窗权限引导 */}
+          <OverlayBanner />
 
           {/* 顶部操作：新建 / 导入 / 录制 / 脚本市场 */}
           <div className="grid grid-cols-4 gap-2">

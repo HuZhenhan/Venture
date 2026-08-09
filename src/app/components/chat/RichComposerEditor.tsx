@@ -3,6 +3,7 @@ import { ComposerDraftNode, ComposerReference } from "../../types";
 import { isUploadedResourceReference } from "../../utils/uploadedResources";
 import { getReferenceTypeLabel } from "../../utils/codeReferences";
 import { debugLog, debugError } from "../../utils/debugLogger";
+import { isAndroid } from "../../utils/platform";
 
 export interface RichComposerEditorHandle {
   focus: () => void;
@@ -233,11 +234,17 @@ export const RichComposerEditor = forwardRef<RichComposerEditorHandle, RichCompo
     }, [references]);
 
     const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-      const shouldSend = sendShortcut
-        ? event.key === "Enter" && !event.shiftKey
-        : event.key === "Enter" && !event.shiftKey && (event.metaKey || event.ctrlKey);
+      const isPlainEnter = event.key === "Enter" && !event.shiftKey;
+      // Android：软键盘的换行键就是 Enter（无 Ctrl/Cmd），按它发送会令用户无法换行。
+      // 故 Android 强制回车只换行，发送仅通过发送按钮或 Ctrl/Cmd+Enter。
+      const shouldSend = isAndroid()
+        ? event.key === "Enter" && (event.metaKey || event.ctrlKey)
+        : sendShortcut
+          ? isPlainEnter
+          : isPlainEnter && (event.metaKey || event.ctrlKey);
 
-      if (shouldSend && !composingRef.current) {
+      // isComposing：IME 组合输入（候选词确认等）期间按 Enter 不触发发送。
+      if (shouldSend && !composingRef.current && !event.nativeEvent.isComposing) {
         event.preventDefault();
         onSubmit();
       }

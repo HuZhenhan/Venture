@@ -19,7 +19,7 @@ import {
   serializeError,
 } from '../utils/messageContentProtocol';
 import { executeTool } from '../services/toolService';
-import { checkAccessibilityPermissionOnce, executeAgentTool, isAgentTool, waitForPermissionResolution } from '../services/agentService';
+import { checkAccessibilityPermissionOnce, executeAgentTool, hideOverlay, isAgentTool, waitForPermissionResolution } from '../services/agentService';
 import { useAgentStore } from '../store/agentState';
 import { usePreferencesStore } from '../store/usePreferencesStore';
 import { debugError } from '../utils/debugLogger';
@@ -31,8 +31,6 @@ import {
 } from '../utils/toolPermissions';
 
 const DEFAULT_CHAT_TEMPERATURE = 0.8;
-/// Agent 工具循环最大迭代次数，防止模型陷入无限工具调用。
-const MAX_TOOL_ITERATIONS = 15;
 
 // ── 生成控制状态（模块级单例）──────────────────────────────────────────────
 // 生成会话状态（generatingChatId / generationSession）存于全局 store，而
@@ -42,8 +40,6 @@ const MAX_TOOL_ITERATIONS = 15;
 // 无法中断另一实例发起的生成（如回答 ask 卡片、重新生成后的 continue）。
 // 同一时刻只有一个生成会话（generatingChatId 全局唯一），单例语义安全。
 const abortControllerRef = { current: null as AbortController | null };
-/// Agent 工具循环迭代计数。每次新一轮（非 continue）生成时重置。
-const toolLoopIterationRef = { current: 0 };
 /// 持有 triggerAIResponse 的引用，供 runToolLoop 继续生成时调用，打破循环依赖。
 const triggerRef = { current: null as ((chatId: string, modelId?: string, options?: { continueMessageId?: string }) => void) | null };
 /// 流式 tool_call delta 累积器：按 index 累积 id/name/arguments。
@@ -228,8 +224,6 @@ export function useGeneration() {
    * 3. 逐个执行 pending 工具：先置 running，调用后端执行，再置 completed/failed 并回填 output；
    * 4. 全部执行完毕后，以 continue 模式重新触发 AI 响应，让模型读取工具结果继续生成。
    *
-   * 迭代上限 MAX_TOOL_ITERATIONS 防止模型陷入无限工具调用。
-   *
    * turnMessageId：当前轮次对应的 user message ID，用于文件回退系统的 turn 级关联。
    */
   const runToolLoop = useCallback(
@@ -250,20 +244,8 @@ export function useGeneration() {
       const tools = message.toolCalls ?? [];
       const pending = tools.filter((t) => t.status === 'pending');
 
-      // 无 pending 工具或已达迭代上限 → 正常收尾
-      if (pending.length === 0 || toolLoopIterationRef.current >= MAX_TOOL_ITERATIONS) {
-        if (toolLoopIterationRef.current >= MAX_TOOL_ITERATIONS && pending.length > 0) {
-          // 达上限仍有 pending 工具：标记为 failed 并提示
-          const cappedTools = tools.map((t) =>
-            t.status === 'pending'
-              ? { ...t, status: 'failed' as ToolCallStatus, output: `已达到工具调用迭代上限 (${MAX_TOOL_ITERATIONS})，中止执行。` }
-              : t
-          );
-          updateMessageInChat(chatId, messageId, (msg) => ({
-            ...msg,
-            toolCalls: cappedTools,
-          }));
-        }
+      // 无 pending 工具 → 正常收尾
+      if (pending.length === 0) {
         if (!isContinue) {
           void generateAndApplyTitles(chatId, messageId, modelId);
         }
@@ -297,7 +279,6 @@ export function useGeneration() {
       }
 
       // 执行普通 pending 工具
-      toolLoopIterationRef.current += 1;
       for (const tool of normalTools) {
         // 停止（handleStopGeneration）或新一轮生成会递增 seq，中止剩余工具执行
         if (toolLoopSeqRef.current !== mySeq) break;
@@ -539,10 +520,8 @@ export function useGeneration() {
     const resumeContent = options?.resumeContent;
     const aiMessageId = isContinue ? options!.continueMessageId! : crypto.randomUUID();
     // 新一轮生成：递增序号以取消任何仍在执行的旧 runToolLoop，防止并发 continue。
-    // 同时重置工具循环计数器；continue 模式沿用已有计数。
     if (!isContinue) {
       toolLoopSeqRef.current += 1;
-      toolLoopIterationRef.current = 0;
     }
     // 每次生成重置 tool call 累积器
     toolCallAccumulator.current.clear();
@@ -982,8 +961,9 @@ export function useGeneration() {
     toolLoopSeqRef.current += 1;
     abortControllerRef.current?.abort();
     abortControllerRef.current = null;
-    // 用户主动中止：重置工具循环计数器，避免下次生成沿用旧计数
-    toolLoopIterationRef.current = 0;
+    // 通知后端关闭悬浮窗（SSE 流被断开时后端的流尾帧 hide 不会执行，
+    // 状态残留会导致切后台时错误恢复显示；失败静默，下次任务会重新驱动）
+    void hideOverlay().catch(() => {});
 
     const session = generationSession;
     setGenerationSession(null);

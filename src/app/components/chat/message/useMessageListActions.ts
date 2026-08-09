@@ -6,7 +6,11 @@ import { useGeneration } from '../../../hooks/useGeneration';
 import { copyTextToClipboard } from '../../../utils/clipboard';
 import { adaptLegacyMessageContent, getVisibleText } from '../../../utils/messageContentProtocol';
 import { INSERT_CHAT_EVENT } from '../../../utils/codeReferences';
-import { restoreTurn } from '../../../services/toolService';
+import {
+  fetchApprovalResults,
+  notifyApproval,
+  restoreTurn,
+} from '../../../services/toolService';
 import { toolSignature, USER_REJECTED_OUTPUT } from '../../../utils/toolPermissions';
 
 export function useMessageListActions(chat: { id: string; messages: Message[] } | null, activeChatId: string | null) {
@@ -202,6 +206,58 @@ export function useMessageListActions(chat: { id: string; messages: Message[] } 
     );
     resumeToolExecution(activeChatId, messageId);
   }, [activeChatId, resumeToolExecution, updateChatMessages]);
+
+  // ── 悬浮窗授权（Android 后台场景） ──────────────────────────────────────
+  // 检测到 needs_approval 工具时：通知后端请求显示授权悬浮窗（应用在前台时
+  // Kotlin 侧不显示，由应用内授权卡片处理），并轮询悬浮窗授权结果；
+  // 拿到结果后按决策复用应用内授权处理逻辑恢复工具执行流程。
+  useEffect(() => {
+    if (!activeChatId) return;
+    const currentChat = chatRef.current;
+    if (!currentChat) return;
+
+    const pending = currentChat.messages.flatMap((m) =>
+      (m.toolCalls ?? [])
+        .filter((tc) => tc.status === 'needs_approval')
+        .map((tc) => ({ messageId: m.id, toolId: tc.id, tool: tc })),
+    );
+    if (pending.length === 0) return;
+
+    // 通知后端显示授权悬浮窗（幂等：Kotlin 侧已有卡片时不重建）
+    for (const p of pending) {
+      notifyApproval({
+        chatId: activeChatId,
+        messageId: p.messageId,
+        toolId: p.toolId,
+        toolName: p.tool.name,
+        input: p.tool.input ?? {},
+        description: p.tool.description,
+      }).catch((err) => console.warn('[approval] notifyApproval 失败', err));
+    }
+
+    // 轮询消费悬浮窗授权结果（取出即删）
+    const timer = window.setInterval(() => {
+      fetchApprovalResults(activeChatId)
+        .then((results) => {
+          for (const r of results) {
+            if (r.decision === 'approve') handleApproveToolCall(r.messageId, r.toolId);
+            else if (r.decision === 'always_approve') handleAlwaysApproveToolCall(r.messageId, r.toolId);
+            else handleRejectToolCall(r.messageId, r.toolId);
+          }
+        })
+        .catch(() => {
+          // 网络抖动等：下轮继续轮询
+        });
+    }, 2000);
+
+    return () => window.clearInterval(timer);
+  }, [
+    activeChatId,
+    chat,
+    handleApproveToolCall,
+    handleAlwaysApproveToolCall,
+    handleRejectToolCall,
+  ]);
 
   const handleMarkdownComplete = useCallback((messageId: string) => {
     if (!activeChatId) {

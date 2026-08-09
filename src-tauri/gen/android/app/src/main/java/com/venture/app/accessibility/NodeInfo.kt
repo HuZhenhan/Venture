@@ -141,8 +141,8 @@ class NodeInfo(
             else -> "ACTION_${action.id}"
         }
 
-        /** DFS 递归捕获为纯数据快照（规格书 3.4） */
-        fun capture(context: Context, node: AccessibilityNodeInfo, depth: Int = 0): NodeInfo {
+        /** DFS 递归捕获为纯数据快照（规格书 3.4）。index 为兄弟序号（v3 anchor 祖先路径用） */
+        fun capture(context: Context, node: AccessibilityNodeInfo, depth: Int = 0, index: Int = -1): NodeInfo {
             val boundsScreen = Rect()
             node.getBoundsInScreen(boundsScreen)
             val boundsParent = Rect()
@@ -166,7 +166,7 @@ class NodeInfo(
             val children = mutableListOf<NodeInfo>()
             for (i in 0 until node.childCount) {
                 val child = runCatching { node.getChild(i) }.getOrNull() ?: continue
-                children.add(capture(context, child, depth + 1))
+                children.add(capture(context, child, depth + 1, i))
                 child.recycle()
             }
 
@@ -195,7 +195,7 @@ class NodeInfo(
                 selected = node.isSelected,
                 visibleToUser = node.isVisibleToUser,
                 depth = depth,
-                indexInParent = -1, // 由调用方需要时补（capture 树内不依赖）
+                indexInParent = index,
                 childCount = node.childCount,
                 row = row, column = column, rowSpan = rowSpan, columnSpan = columnSpan,
                 actionNames = node.actionList.map { actionName(it) },

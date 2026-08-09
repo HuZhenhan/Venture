@@ -248,10 +248,12 @@ install_apk() {
   echo "$DEVICES"
 
   info "安装 APK (覆盖安装，保留应用数据)..."
+  # 注意：禁止卸载后重装兜底——会清空应用数据（聊天记录/配置/技能均丢失，曾发生事故）。
+  # 覆盖安装失败（通常为签名不一致）时仅提示，由用户决定如何处理。
   if ! adb install -r "$FINAL_APK" 2>&1; then
-    warn "覆盖安装失败（可能是签名不一致），回退为卸载后重装（将清空应用数据）"
-    adb uninstall com.venture.app 2>/dev/null || true
-    adb install "$FINAL_APK" 2>&1
+    fail "覆盖安装失败（请检查签名是否一致）。已放弃自动卸载重装以避免数据丢失。
+APK 位于: $FINAL_APK
+如需强制重装（会清空应用数据），请手动执行: adb uninstall com.venture.app && adb install $FINAL_APK"
   fi
   ok "安装完成！"
 }

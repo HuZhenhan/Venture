@@ -1,5 +1,7 @@
 package com.venture.app
 
+import android.content.Context
+import android.os.Build
 import android.os.Bundle
 import android.view.ViewGroup
 import android.webkit.WebSettings
@@ -8,22 +10,23 @@ import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
-import com.venture.app.bridge.NativeToolRouter
+import com.venture.app.bridge.ApprovalOverlayWindowManager
+import com.venture.app.bridge.NativeToolBridge
+import com.venture.app.bridge.OverlayWindowManager
 import com.venture.app.bridge.ToolServer
 
 class MainActivity : TauriActivity() {
     lateinit var browserManager: BrowserWebViewManager
         private set
 
-    private lateinit var toolRouter: NativeToolRouter
-
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         browserManager = BrowserWebViewManager(this)
-        // 启动原生工具桥（127.0.0.1:46307），供后端 tool_router 转发无障碍工具调用
-        toolRouter = NativeToolRouter(this)
-        ToolServer.ensureStarted { tool, args -> toolRouter.dispatch(tool, args) }
+        // 启动原生工具桥（127.0.0.1:46307），供后端 tool_router 转发无障碍工具调用。
+        // 经 NativeToolBridge 统一入口，支持进程被杀后无障碍服务自愈复用同一 router。
+        NativeToolBridge.init(this)
+        ToolServer.ensureStarted(this) { tool, args -> NativeToolBridge.dispatch(tool, args) }
         setupImeInsets()
         setupBackNavigation()
     }
@@ -84,9 +87,23 @@ class MainActivity : TauriActivity() {
     override fun onWebViewCreate(webView: WebView) {
         super.onWebViewCreate(webView)
         // 覆盖安装后 WebView 会从持久化 HTTP 缓存加载旧版 index.html（此前出现过
-        // 设备界面停留在旧版本、新功能不生效的问题）。每次启动清空缓存，
-        // 确保始终加载 assets 中的最新前端。
-        webView.clearCache(true)
+        // 设备界面停留在旧版本、新功能不生效的问题）。启动优化：仅当 versionCode
+        // 变化（覆盖安装/升级）时清空缓存，确保加载最新前端；日常重进命中缓存，
+        // 避免每次冷加载单文件 bundle 导致白屏变长。
+        // 注意：开发打包若 versionCode 未递增，设备上可能仍是旧版前端——改完前端
+        // 必须递增 src-tauri/gen/android/app/tauri.properties 的 tauri.android.versionCode。
+        val versionCode = if (Build.VERSION.SDK_INT >= 28) {
+            packageManager.getPackageInfo(packageName, 0).longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            packageManager.getPackageInfo(packageName, 0).versionCode.toLong()
+        }
+        val prefs = getSharedPreferences("venture_webview_cache", Context.MODE_PRIVATE)
+        val lastVersion = prefs.getLong("last_version_code", -1L)
+        if (lastVersion != versionCode) {
+            webView.clearCache(true)
+            prefs.edit().putLong("last_version_code", versionCode).apply()
+        }
         WebView.setWebContentsDebuggingEnabled(true)
         // 允许 HTTPS 页面 (https://tauri.localhost) 访问本地 HTTP 后端 (http://127.0.0.1:49527)。
         // targetSdk>=28 时 WebView 默认 MIXED_CONTENT_NEVER_ALLOW，会拦截此类混合内容请求，
@@ -96,6 +113,20 @@ class MainActivity : TauriActivity() {
         val tauriView = webView as? RustWebView ?: return
         browserManager.setTauriView(tauriView)
         tauriView.addJavascriptInterface(browserManager.bridge, "BrowserBridge")
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // 回到应用前台：悬浮窗关闭（应用内已有 AI 活动/授权卡片展示），保留状态记忆
+        OverlayWindowManager.onAppForeground()
+        ApprovalOverlayWindowManager.onAppForeground()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // 应用退后台：若 AI 正在运行，悬浮窗恢复显示；有待授权请求时补显授权卡片
+        OverlayWindowManager.onAppBackground()
+        ApprovalOverlayWindowManager.onAppBackground()
     }
 
     override fun onDestroy() {

@@ -9,8 +9,12 @@ use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use include_dir::{include_dir, Dir};
 use serde_json::{json, Value};
 use tokio::sync::{Mutex, RwLock};
+
+/// 内置技能（编译期嵌入 backend/assets/skills/，仅 Android 首次启动安装）。
+static BUILTIN_SKILLS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/assets/skills");
 
 use super::announce::{build_announcement, escape_xml_attr};
 use super::discovery::{load_index, save_index, scan, Platform, ScanOutcome, SkillIndexFile};
@@ -118,14 +122,8 @@ impl SkillService {
 
         // 预填被访问路径：cwd 及其向上至 git root 各级目录（§11.2）
         service.seed_visited_paths().await;
-        // 启动首次扫描
-        let changed = service.discover().await;
-        tracing::info!(
-            "skill service ready: {} skills, {} errors, {} changed",
-            service.inner.read().await.skills.len(),
-            service.inner.read().await.errors.len(),
-            changed.len()
-        );
+        // 注意：内置技能安装 + 首次扫描已从启动路径移出（lib.rs run_server 后台
+        // spawn 执行），避免阻塞 HTTP 监听导致前端启动白屏/等待。
         service
     }
 
@@ -148,6 +146,52 @@ impl SkillService {
                 }
                 cur = dir.parent();
             }
+        }
+    }
+
+    /// 内置技能安装：把编译期嵌入的 backend/assets/skills/* 复制到全局技能目录。
+    /// 同名技能目录已存在（用户修改过或旧版本已装过）则跳过，不覆盖。
+    /// 由 run_server 后台 spawn 调用（启动路径不阻塞）。
+    ///
+    /// 旧版本曾把目录安装成嵌套结构（skills/<name>/<name>/...），此处检测并
+    /// 上移为单层 skills/<name>/（content:// 映射与 location 渲染均按单层解析）。
+    pub async fn install_builtin_skills(&self) {
+        if self.platform != Platform::Android {
+            return;
+        }
+        let skills_root = self.skillx_dir.join("skills");
+        for dir in BUILTIN_SKILLS.dirs() {
+            let Some(name) = dir.path().file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let target = skills_root.join(name);
+
+            // 旧版嵌套结构迁移：skills/<name>/<name> → skills/<name>
+            let nested = target.join(name);
+            if nested.exists() && !target.join("SKILL.md").exists() {
+                if !target.exists() {
+                    let _ = std::fs::rename(&nested, &target);
+                    tracing::info!("builtin skill nested dir migrated: {name}");
+                } else {
+                    for entry in std::fs::read_dir(&nested).ok().into_iter().flatten() {
+                        let Ok(entry) = entry else { continue };
+                        let _ = std::fs::rename(entry.path(), target.join(entry.file_name()));
+                    }
+                    let _ = std::fs::remove_dir_all(&nested);
+                    tracing::info!("builtin skill nested contents migrated: {name}");
+                }
+            }
+
+            if target.exists() {
+                tracing::debug!("builtin skill already present, skip: {name}");
+                continue;
+            }
+            // 递归提取整个目录树（assets 单层结构 → skills/<name>/ 单层）
+            if let Err(e) = dir.extract(&target) {
+                tracing::warn!("builtin skill extract failed {name}: {e}");
+                continue;
+            }
+            tracing::info!("builtin skill installed: {name}");
         }
     }
 

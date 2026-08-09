@@ -145,6 +145,27 @@ fn resolve_path(
     Ok(resolved)
 }
 
+/// Android skill 资源 URI（§14 变体 C）：`content://skillx/<name>/<相对路径>`
+/// → `<skillx_dir>/skills/<name>/<相对路径>`（skill 内容渲染时展示给模型的形式，
+/// 模型据此用 read 工具读取 skill 资源文件）。非该前缀的路径原样返回。
+fn resolve_skill_content_uri(raw: &str, skill_service: Option<&SkillService>) -> String {
+    if let Some(rest) = raw.strip_prefix("content://skillx/") {
+        if let Some(svc) = skill_service {
+            let mut parts = rest.splitn(2, '/');
+            let name = parts.next().unwrap_or("");
+            let rel = parts.next().unwrap_or("");
+            return svc
+                .skillx_dir()
+                .join("skills")
+                .join(name)
+                .join(rel)
+                .to_string_lossy()
+                .into_owned();
+        }
+    }
+    raw.to_string()
+}
+
 /// 工具入口。根据工具名分发到对应实现。
 ///
 /// - `tool`: 工具名（大小写敏感，需与协议定义一致）
@@ -169,7 +190,8 @@ pub async fn execute_tool(
     if let Some(svc) = skill_service {
         if matches!(tool, "Read" | "Write" | "Edit") {
             if let Some(p) = input.get("file_path").and_then(Value::as_str) {
-                let resolved = resolve_path(p, workspace_root)
+                let p = resolve_skill_content_uri(p, Some(svc));
+                let resolved = resolve_path(&p, workspace_root)
                     .map(|r| r.to_string_lossy().into_owned())
                     .unwrap_or_else(|_| p.to_string());
                 svc.record_access(&resolved).await;
@@ -179,7 +201,7 @@ pub async fn execute_tool(
     match tool {
         "Write" => execute_write(input, workspace_root, file_history, turn_message_id).await,
         "Edit" => execute_edit(input, workspace_root, chat_id, read_tracker, file_history, turn_message_id).await,
-        "Read" => execute_read(input, workspace_root, chat_id, read_tracker).await,
+        "Read" => execute_read(input, workspace_root, chat_id, read_tracker, skill_service).await,
         "Glob" => execute_glob(input, workspace_root).await,
         "Grep" => execute_grep(input, workspace_root).await,
         "AskUserQuestion" => execute_ask_user_question(input).await,
@@ -642,6 +664,7 @@ async fn execute_read(
     workspace_root: Option<&Path>,
     chat_id: &str,
     read_tracker: &ReadTracker,
+    skill_service: Option<&SkillService>,
 ) -> Result<ToolOutput, AppError> {
     let file_path = input
         .get("file_path")
@@ -659,7 +682,9 @@ async fn execute_read(
         .and_then(Value::as_u64)
         .map(|v| v as usize);
 
-    let resolved = resolve_path(file_path, workspace_root)?;
+    // Android skill 资源 URI（content://skillx/...）→ 真实文件路径
+    let file_path = resolve_skill_content_uri(file_path, skill_service);
+    let resolved = resolve_path(&file_path, workspace_root)?;
 
     let bytes = tokio::fs::read(&resolved)
         .await

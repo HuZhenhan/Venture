@@ -34,7 +34,7 @@ pub struct ProviderRecord {
 }
 
 fn default_input_context_window() -> u32 {
-    20
+    128
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -244,9 +244,10 @@ fn validate_provider_input(
         }
     }
 
-    if input_context_window == 0 || input_context_window > 200 {
+    // 单位为 K tokens；无上限（与 Win 端统一口径，不校验最大值），仅拒绝 0
+    if input_context_window == 0 {
         return Err(AppError::InvalidProviderConfig(
-            "inputContextWindow must be in [1, 200]".into(),
+            "inputContextWindow must be >= 1".into(),
         ));
     }
     Ok(())

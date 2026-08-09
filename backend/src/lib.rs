@@ -3,6 +3,7 @@ pub mod config;
 pub mod crypto;
 pub mod error;
 pub mod file_history;
+pub mod keepalive;
 pub mod provider;
 pub mod agent;
 pub mod chat;
@@ -11,6 +12,7 @@ pub mod skill;
 pub mod task_store;
 pub mod tools;
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -21,8 +23,9 @@ use axum::{
     Json, Router,
 };
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tokio::sync::Mutex;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::info;
 
@@ -44,7 +47,21 @@ pub(crate) struct AppState {
     pub(crate) file_history: Arc<file_history::FileHistory>,
     pub(crate) skill_service: Arc<skill::SkillService>,
     pub(crate) agent_router: agent::AgentRouter,
+    /// Android 后台保活（任务活动脉冲；桌面端静默降级）
+    pub(crate) keepalive: keepalive::KeepAlive,
+    /// 悬浮窗授权结果（key: chatId → 待前端消费的队列；取出即删）
+    pub(crate) approvals: Arc<Mutex<HashMap<String, Vec<ApprovalResult>>>>,
     startup_nonce: String,
+}
+
+/// 悬浮窗授权结果（Kotlin 授权悬浮窗点击后回传，前端轮询消费）
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ApprovalResult {
+    pub message_id: String,
+    pub tool_id: String,
+    /// approve | always_approve | reject
+    pub decision: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -59,7 +76,7 @@ struct AddProviderRequest {
 }
 
 fn default_input_context_window() -> u32 {
-    20
+    128
 }
 
 #[derive(Debug, Deserialize)]
@@ -222,6 +239,10 @@ async fn chat_stream(
     State(s): State<AppState>,
     Json(body): Json<ChatStreamRequest>,
 ) -> Result<axum::response::Response, AppError> {
+    // Android 保活：AI 生成期间保持进程存活（失败静默降级）
+    s.keepalive.pulse("AI 生成中…").await;
+    // AI 活动悬浮窗：生成开始 → 思考动画（流式输出与结束在 chat.rs 内挂钩）
+    s.keepalive.overlay("thinking", "").await;
     let req = chat::ChatRequest {
         provider_id: body.provider_id,
         model_id: body.model_id,
@@ -231,7 +252,94 @@ async fn chat_stream(
         max_tokens: body.max_tokens,
         trace_upstream: body.trace_upstream,
     };
-    chat::handle_stream(s.store.clone(), s.http.clone(), req, Some(s.skill_service.clone())).await
+    chat::handle_stream(
+        s.store.clone(),
+        s.http.clone(),
+        req,
+        Some(s.skill_service.clone()),
+        s.keepalive.clone(),
+    )
+    .await
+}
+
+// ─── 悬浮窗授权（Android 后台场景） ────────────────────────────────────────
+//
+// 工具权限询问（needs_approval）时前端调用 notify 请求 Kotlin 在屏幕下方显示
+// 授权悬浮窗（应用在前台时 Kotlin 侧不显示，由应用内授权卡片处理）；
+// 用户点击悬浮窗按钮 → Kotlin 回传 result → 前端轮询 results 消费（取出即删）。
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApprovalNotifyRequest {
+    chat_id: String,
+    message_id: String,
+    tool_id: String,
+    tool_name: String,
+    #[serde(default)]
+    input: Value,
+    #[serde(default)]
+    description: Option<String>,
+}
+
+/// 前端：请求显示授权悬浮窗（转发给 Kotlin 桥；前台时 Kotlin 侧不显示）
+async fn approval_notify_handler(
+    State(s): State<AppState>,
+    Json(body): Json<ApprovalNotifyRequest>,
+) -> Json<Value> {
+    s.keepalive
+        .approval(
+            "show",
+            json!({
+                "chatId": body.chat_id,
+                "messageId": body.message_id,
+                "toolId": body.tool_id,
+                "toolName": body.tool_name,
+                "input": body.input,
+                "description": body.description,
+            }),
+        )
+        .await;
+    Json(json!({ "ok": true }))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApprovalResultRequest {
+    chat_id: String,
+    message_id: String,
+    tool_id: String,
+    /// approve | always_approve | reject
+    decision: String,
+}
+
+/// Kotlin 悬浮窗：用户点击授权按钮后回传结果
+async fn approval_result_handler(
+    State(s): State<AppState>,
+    Json(body): Json<ApprovalResultRequest>,
+) -> Json<Value> {
+    if !matches!(body.decision.as_str(), "approve" | "always_approve" | "reject") {
+        return Json(json!({ "ok": false, "error": "unknown decision" }));
+    }
+    let mut map = s.approvals.lock().await;
+    map.entry(body.chat_id.clone()).or_default().push(ApprovalResult {
+        message_id: body.message_id,
+        tool_id: body.tool_id,
+        decision: body.decision,
+    });
+    Json(json!({ "ok": true }))
+}
+
+/// 前端：轮询消费授权结果（取出即删，避免重复处理）
+async fn approval_results_handler(
+    State(s): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> Json<Value> {
+    let chat_id = params.get("chatId").cloned().unwrap_or_default();
+    let results = {
+        let mut map = s.approvals.lock().await;
+        map.remove(&chat_id).unwrap_or_default()
+    };
+    Json(json!({ "results": results }))
 }
 
 // ─── 工具调用与任务管理路由处理器 ──────────────────────────────────────────
@@ -471,10 +579,32 @@ struct AgentToolRequest {
     chat_id: String,
 }
 
+/// 自动化工具 → 悬浮窗分类文案（规格书 6.4 展示语义）
+fn overlay_text_for_tool(tool: &str) -> &'static str {
+    match tool {
+        // 布局获取相关
+        "get_layout" | "get_node" | "find_node" | "wait_for_node" | "wait_for_text"
+        | "wait_for_app" | "get_windows" | "screenshot" => "AI 正在分析布局",
+        // 屏幕操作相关
+        "click" | "long_click" | "press" | "swipe" | "gesture" | "node_action"
+        | "input_text" | "paste" | "key_event" | "global_action" | "set_clipboard"
+        | "launch_app" | "open_url" | "scroll" => "AI 正在操控屏幕",
+        // 脚本运行 / 制作
+        "run_script" => "AI 正在使用脚本",
+        "create_script" | "update_script" | "validate_script" | "delete_script"
+        | "import_script" => "AI 正在定制脚本",
+        _ => "AI 正在使用工具",
+    }
+}
+
 async fn agent_tool_handler(
     State(s): State<AppState>,
     Json(body): Json<AgentToolRequest>,
 ) -> Json<Value> {
+    // Android 保活：自动化工具调用期间保持进程存活（失败静默降级）
+    s.keepalive.pulse("自动化工具执行中…").await;
+    // AI 活动悬浮窗：按工具分类展示当前动作
+    s.keepalive.overlay("tool", overlay_text_for_tool(&body.tool)).await;
     Json(s.agent_router.execute(&body.tool, &body.args, &body.chat_id).await)
 }
 
@@ -511,6 +641,38 @@ async fn agent_permission_state_handler(State(s): State<AppState>) -> Json<Value
 
 async fn agent_permission_open_handler(State(s): State<AppState>) -> Json<Value> {
     Json(s.agent_router.bridge.call_tool("__open_accessibility_settings__", &json!({})).await)
+}
+
+// ─── 后台保活引导 API（Android；桌面端桥不可达返回错误） ───────────────────
+
+async fn keepalive_status_handler(State(s): State<AppState>) -> Json<Value> {
+    Json(s.agent_router.bridge.call_tool("__battery_exempt__", &json!({})).await)
+}
+
+async fn keepalive_request_exempt_handler(State(s): State<AppState>) -> Json<Value> {
+    Json(s.agent_router.bridge.call_tool("__request_battery_exempt__", &json!({})).await)
+}
+
+async fn keepalive_open_settings_handler(State(s): State<AppState>) -> Json<Value> {
+    Json(s.agent_router.bridge.call_tool("__open_battery_settings__", &json!({})).await)
+}
+
+// ─── AI 活动悬浮窗权限 API（Android） ─────────────────────────────────────
+
+async fn overlay_permission_handler(State(s): State<AppState>) -> Json<Value> {
+    Json(s.agent_router.bridge.call_tool("__overlay_permission__", &json!({})).await)
+}
+
+async fn overlay_open_settings_handler(State(s): State<AppState>) -> Json<Value> {
+    Json(s.agent_router.bridge.call_tool("__open_overlay_settings__", &json!({})).await)
+}
+
+/// 前端主动关闭悬浮窗（停止按钮/异常中断时调用）：
+/// SSE 流被客户端断开时 axum 取消流、尾帧 hide 不会执行，悬浮窗状态会残留，
+/// 导致切后台时错误恢复显示。由前端在停止时显式通知后端发 hide。
+async fn overlay_hide_handler(State(s): State<AppState>) -> Json<Value> {
+    s.keepalive.overlay("hide", "").await;
+    Json(json!({ "ok": true }))
 }
 
 // ─── 脚本注册表路由（规格书 8.1 / DSL §12） ──────────────────────────────
@@ -593,11 +755,17 @@ async fn run_script_handler(
     Path(name): Path<String>,
     Json(body): Json<RunScriptRequest>,
 ) -> Json<Value> {
-    Json(s
+    // Android 保活：脚本执行期间保持进程存活（失败静默降级）
+    s.keepalive.pulse(&format!("执行脚本 {name}…")).await;
+    // AI 活动悬浮窗：脚本运行展示，结束后移除（规格书 6.4）
+    s.keepalive.overlay("tool", "AI 正在使用脚本").await;
+    let result = s
         .agent_router
         .engine
         .run_script(&name, body.params, &body.chat_id, body.confirmed, 0)
-        .await)
+        .await;
+    s.keepalive.overlay("hide", "").await;
+    Json(result)
 }
 
 async fn validate_script_handler(
@@ -837,9 +1005,15 @@ pub async fn run_server(data_dir: Option<PathBuf>) -> anyhow::Result<()> {
         file_history::FileHistory::new(file_history_dir).await?
     );
 
-    // 启动时执行 WAL 崩溃恢复
-    if let Err(e) = file_history.recover_from_wal().await {
-        tracing::warn!("WAL 恢复失败（非致命，继续启动）：{e}");
+    // 启动优化：WAL 崩溃恢复移到后台异步执行，不阻塞 HTTP 监听
+    // （恢复期间新写入记录与恢复项 record_id 不同，并发安全；失败非致命）
+    {
+        let fh = file_history.clone();
+        tokio::spawn(async move {
+            if let Err(e) = fh.recover_from_wal().await {
+                tracing::warn!("WAL 恢复失败（非致命，继续启动）：{e}");
+            }
+        });
     }
 
     // Skill 系统（规格书 §3.1）：Android 端仅全局层扫描，无项目层/兼容目录
@@ -849,6 +1023,17 @@ pub async fn run_server(data_dir: Option<PathBuf>) -> anyhow::Result<()> {
         workspace_root(),
     )
     .await;
+
+    // 启动优化：内置技能安装 + 首次技能扫描移到后台异步执行，
+    // 不阻塞 HTTP 监听（skill 服务本身已就绪，扫描完成前 list 返回空列表）。
+    {
+        let svc = skill_service.clone();
+        tokio::spawn(async move {
+            svc.install_builtin_skills().await;
+            let changed = svc.discover().await;
+            tracing::info!("skill initial scan done: {} changed", changed.len());
+        });
+    }
 
     let http = Arc::new(
         Client::builder()
@@ -873,7 +1058,10 @@ pub async fn run_server(data_dir: Option<PathBuf>) -> anyhow::Result<()> {
     );
     let agent_router = agent::AgentRouter::new(native_bridge, trace_store, script_engine);
 
-    let state = AppState { store, app_data, http, task_store, read_tracker, file_history, skill_service, agent_router, startup_nonce };
+    // 后台保活客户端（复用原生桥 base_url；桌面端无桥时自动禁用）
+    let keepalive = keepalive::KeepAlive::from_env();
+
+    let state = AppState { store, app_data, http, task_store, read_tracker, file_history, skill_service, agent_router, keepalive, approvals: Arc::new(Mutex::new(HashMap::new())), startup_nonce };
 
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(
@@ -937,6 +1125,14 @@ pub async fn run_server(data_dir: Option<PathBuf>) -> anyhow::Result<()> {
         .route("/api/agent/health", get(agent_health_handler))
         .route("/api/agent/permission", get(agent_permission_state_handler))
         .route("/api/agent/permission/open", post(agent_permission_open_handler))
+        // 后台保活引导（电池优化白名单）
+        .route("/api/agent/keepalive/status", get(keepalive_status_handler))
+        .route("/api/agent/keepalive/request-exempt", post(keepalive_request_exempt_handler))
+        .route("/api/agent/keepalive/open-settings", post(keepalive_open_settings_handler))
+        // AI 活动悬浮窗权限
+        .route("/api/agent/overlay/permission", get(overlay_permission_handler))
+        .route("/api/agent/overlay/open-settings", post(overlay_open_settings_handler))
+        .route("/api/agent/overlay/hide", post(overlay_hide_handler))
         // 脚本注册表 CRUD + 运行 + 校验 + 导入（DSL §12）
         .route("/api/agent/scripts", get(list_scripts_handler))
         .route("/api/agent/scripts/validate", post(validate_script_handler))
@@ -950,6 +1146,9 @@ pub async fn run_server(data_dir: Option<PathBuf>) -> anyhow::Result<()> {
         // Skill 系统（规格书 §2/§10.1）：管理 / 引用 / 设置 / Android 导入
         .route("/api/skills", get(list_skills_handler).post(create_skill_handler))
         .route("/api/skills/refresh", post(refresh_skills_handler))
+        .route("/api/approval/notify", post(approval_notify_handler))
+        .route("/api/approval/result", post(approval_result_handler))
+        .route("/api/approval/results", get(approval_results_handler))
         .route("/api/skills/settings", get(get_skill_settings_handler).put(update_skill_settings_handler))
         .route("/api/skills/import", post(import_skill_handler))
         .route("/api/skills/:name/content", get(skill_content_handler))

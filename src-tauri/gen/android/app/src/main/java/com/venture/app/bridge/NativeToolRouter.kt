@@ -7,15 +7,15 @@ import android.os.Build
 import android.os.Process
 import android.util.DisplayMetrics
 import android.view.WindowManager
-import android.view.accessibility.AccessibilityNodeInfo
 import com.venture.app.accessibility.AccessibilityBridge
 import com.venture.app.accessibility.Capture
-import com.venture.app.accessibility.LayoutCompressor
 import com.venture.app.accessibility.LayoutInspector
+import com.venture.app.accessibility.LayoutV3
 import com.venture.app.accessibility.NodeInfo
 import com.venture.app.accessibility.VentureAccessibilityService
 import com.venture.app.accessibility.automator.ActionExecutor
 import com.venture.app.accessibility.automator.AppLauncher
+import com.venture.app.accessibility.automator.AppStopper
 import com.venture.app.accessibility.automator.GestureExecutor
 import com.venture.app.accessibility.automator.GlobalActionExecutor
 import com.venture.app.accessibility.automator.KeyEventInjector
@@ -23,6 +23,8 @@ import com.venture.app.accessibility.automator.NodeFinder
 import com.venture.app.accessibility.automator.ScreenMetrics
 import com.venture.app.accessibility.automator.ScreenshotHandler
 import com.venture.app.accessibility.automator.TextInputHandler
+import kotlin.math.hypot
+import kotlin.math.max
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -31,7 +33,7 @@ import org.json.JSONObject
  *
  * - 入参校验：必须字段缺失 → 明确错误（LLM 可自我纠正重调）
  * - 全部返回结构化 JSON，失败带 error:{code,message}
- * - 维护"最近一次布局快照"（编号 → NodeInfo），供 get_node / click(node_id) 查表转坐标
+ * - 维护"最近一次布局快照"（v3 简化结果：编号 → PNode + rev + anchor），供 get_node / click(node_id) 查表转坐标
  * - wait_for_*：500ms 轮询直至命中或超时（规格书 6.3）
  */
 class NativeToolRouter(private val context: Context) {
@@ -39,6 +41,9 @@ class NativeToolRouter(private val context: Context) {
     companion object {
         const val WAIT_POLL_INTERVAL_MS = 500L
         const val DEFAULT_WAIT_TIMEOUT_MS = 10_000L
+
+        /** get_layout 返回大小上限（20kB）：超过不返回布局树，引导切换模式 */
+        const val LAYOUT_MAX_BYTES = 20 * 1024
     }
 
     private val bridge = AccessibilityBridge()
@@ -49,15 +54,20 @@ class NativeToolRouter(private val context: Context) {
     private val globalActions = GlobalActionExecutor({ VentureAccessibilityService.instance })
     private val textInput = TextInputHandler(context, bridge, actionExecutor, gestureExecutor)
     private val appLauncher = AppLauncher(context)
+    private val appStopper = AppStopper(context)
     private val keyEventInjector = KeyEventInjector(context, bridge, globalActions, actionExecutor)
     private val screenshotHandler = ScreenshotHandler(context) { VentureAccessibilityService.instance }
 
-    /** 最近一次布局快照（brief 编号表），click(node_id)/get_node 查表用 */
+    /** 最近一次布局快照（v3 简化结果：行式 DSL + 编号表 + anchor），click(node_id)/get_node 查表用 */
     @Volatile
-    private var lastSnapshot: LayoutCompressor.Compressed? = null
+    private var lastSnapshot: LayoutV3.Result? = null
 
     @Volatile
     private var lastCapture: Capture? = null
+
+    /** 最近一次动作执行时间（抓树时机：动作后静默再抓树，避免过渡动画中间态） */
+    @Volatile
+    private var lastActionAt = 0L
 
     fun dispatch(tool: String, args: JSONObject): JSONObject {
         if (tool == "__health__") return health()
@@ -72,6 +82,29 @@ class NativeToolRouter(private val context: Context) {
         if (tool == "__open_accessibility_settings__") {
             runCatching { AccessibilityPermissionHelper.openAccessibilitySettings(context) }
             return ok()
+        }
+        // 后台保活引导（设置页「后台保活」区块）
+        if (tool == "__battery_exempt__") {
+            return ok().put("exempt", BatteryOptimizationHelper.isExempt(context))
+        }
+        if (tool == "__request_battery_exempt__") {
+            val requested = BatteryOptimizationHelper.requestExempt(context)
+            return ok().put("requested", requested).put("exempt", BatteryOptimizationHelper.isExempt(context))
+        }
+        if (tool == "__open_battery_settings__") {
+            val opened = BatteryOptimizationHelper.openSettings(context)
+            return ok().put("opened", opened)
+        }
+        if (tool == "__keepalive_active__") {
+            return ok().put("active", VentureKeepAliveService.active)
+        }
+        // AI 活动悬浮窗（规格书 6.4）：权限检测 + 跳转授权
+        if (tool == "__overlay_permission__") {
+            return ok().put("granted", OverlayWindowManager.hasPermission(context))
+        }
+        if (tool == "__open_overlay_settings__") {
+            val opened = OverlayWindowManager.openPermissionSettings(context)
+            return ok().put("opened", opened)
         }
         return try {
             when (tool) {
@@ -100,6 +133,7 @@ class NativeToolRouter(private val context: Context) {
                     textInput.setClipboard(text); ok()
                 }
                 "launch_app" -> launchApp(args)
+                "stop_app" -> stopApp(args)
                 "open_url" -> openUrl(args)
                 "scroll" -> scroll(args)
                 // 控制类
@@ -148,15 +182,22 @@ class NativeToolRouter(private val context: Context) {
             .put("operational", VentureAccessibilityService.hasOperationalState)
     }
 
-    /** 捕获布局（brief/full），刷新会话快照 */
-    private fun captureLayout(mode: String): Pair<Capture, LayoutCompressor.Compressed?> {
+    /** 捕获布局（brief→v3 简化 / full→完整 JSON 树），刷新会话快照 */
+    private fun captureLayout(mode: String): Pair<Capture, LayoutV3.Result?> {
         requireService()
+        settleIfNeeded()
         val capture = layoutInspector.captureNow()
             ?: throw ToolException("capture_failed", "无法获取当前窗口布局（无根节点）")
         lastCapture = capture
-        val compressed = if (mode == "full") null else LayoutCompressor.compress(capture.root)
-        lastSnapshot = compressed
-        return capture to compressed
+        val v3 = if (mode == "full") null else LayoutV3.simplify(context, capture)
+        lastSnapshot = v3
+        return capture to v3
+    }
+
+    /** 抓树时机：动作后等待 400ms 静默再抓树，避免过渡动画中间态（v3 配套机制 3） */
+    private fun settleIfNeeded() {
+        val elapsed = System.currentTimeMillis() - lastActionAt
+        if (elapsed < LayoutV3.ACTION_SETTLE_MS) Thread.sleep(LayoutV3.ACTION_SETTLE_MS - elapsed)
     }
 
     /** 自身保护：目标节点属于 Venture 自身包名时拒绝破坏性动作（规格书 §9） */
@@ -185,15 +226,29 @@ class NativeToolRouter(private val context: Context) {
             mode = "brief"
             note = "subagent 模式暂未实现，已降级为 brief"
         }
-        val (capture, compressed) = captureLayout(mode)
+        val (capture, v3) = captureLayout(mode)
         val out = ok()
             .put("windows", capture.windowsToJson())
-        if (compressed != null) {
-            out.put("truncated", compressed.truncated)
-            out.put("root", compressed.root)
+        if (v3 != null) {
+            // v3：行式 DSL 文本（省 token）+ rev 版本 + 元信息（内部已有预算截断控制大小）
+            out.put("text", v3.text)
+            out.put("rev", v3.rev)
+            out.put("truncated", v3.truncated)
+            out.put("cut", v3.cutCount)
+            out.put("viewport", JSONArray(listOf(v3.viewport.left, v3.viewport.top, v3.viewport.right, v3.viewport.bottom)))
+            out.put("screen", "${v3.screenWidth}x${v3.screenHeight}")
+            out.put("modal", v3.modal)
+            out.put("warnings", JSONArray(v3.warnings))
+            out.put("notice", "行式 DSL 布局（text 字段）。坐标与 scroll 方向为准；节点完整属性用 get_node；页面是否变化对比 rev")
         } else {
+            // full：完整 JSON 树，大小保护：> 20kB 不返回，引导换用 brief/agent 模式
+            val rootJson = capture.root.toJson().toString()
+            val size = rootJson.toByteArray(Charsets.UTF_8).size
+            if (size > LAYOUT_MAX_BYTES) {
+                return error("layout_too_large", "布局树大小过大（$size 字节），请使用 brief 模式或 agent 模式")
+            }
             out.put("truncated", false)
-            out.put("root", capture.root.toJson())
+            out.put("root", JSONObject(rootJson))
         }
         note?.let { out.put("notice", it) }
         return out
@@ -206,7 +261,43 @@ class NativeToolRouter(private val context: Context) {
             ?: throw ToolException("no_snapshot", "尚无布局快照，请先调用 get_layout")
         val node = snapshot.nodeMap[nodeId]
             ?: throw ToolException("node_not_found", "节点 $nodeId 不在最近一次布局快照中")
-        return ok().put("node", node.toJson(nodeId))
+        return ok().put("node", v3NodeToJson(node))
+    }
+
+    /** v3 节点完整属性（get_node 返回；raw 字段来自捕获快照） */
+    private fun v3NodeToJson(n: LayoutV3.PNode): JSONObject {
+        val raw = n.node
+        val o = JSONObject()
+        o.put("node_id", n.id)
+        o.put("role", n.role ?: "")
+        o.put("desc", n.desc ?: "")
+        o.put("text", raw.text ?: "")
+        o.put("desc_raw", raw.desc ?: "")
+        o.put("center", JSONArray(listOf(n.clickTarget.x, n.clickTarget.y)))
+        o.put("bounds", JSONArray(listOf(n.bounds.left, n.bounds.top, n.bounds.right, n.bounds.bottom)))
+        n.effectiveFid?.let { o.put("fid", it) }
+        o.put("states", JSONArray(n.states))
+        o.put("acts", JSONArray(n.acts.toList()))
+        o.put("scroll_dir", n.scrollDir ?: "")
+        o.put("float", n.float)
+        o.put("clipped", n.clipped)
+        o.put("occluded", n.occluded)
+        o.put("reason", n.reason ?: "")
+        o.put("class", raw.className ?: "")
+        o.put("pkg", raw.packageName ?: "")
+        o.put("clickable", raw.clickable)
+        o.put("longClickable", raw.longClickable)
+        o.put("scrollable", raw.scrollable)
+        o.put("checkable", raw.checkable)
+        o.put("checked", raw.checked)
+        o.put("enabled", raw.enabled)
+        o.put("editable", raw.editable)
+        o.put("focusable", raw.focusable)
+        o.put("selected", raw.selected)
+        o.put("visible", raw.visibleToUser)
+        o.put("depth", raw.depth)
+        o.put("indexInParent", raw.indexInParent)
+        return o
     }
 
     private fun findNode(args: JSONObject): JSONObject {
@@ -220,58 +311,42 @@ class NativeToolRouter(private val context: Context) {
         }
         if (selector.length() == 0) throw ToolException("missing_param", "find_node 至少需要一个匹配条件")
 
-        // 刷新快照以对齐 node_id 编号
-        val (_, compressed) = captureLayout("brief")
+        // 刷新快照以对齐 node_id 编号（v3 简化结果）
+        val (_, v3) = captureLayout("brief")
         val matches = mutableListOf<JSONObject>()
-        findInSnapshot(compressed, selector, limit, matches)
+        v3!!.nodeMap.values.forEach { n ->
+            if (matches.size >= limit) return@forEach
+            if (v3Match(n, selector)) {
+                matches.add(JSONObject()
+                    .put("node_id", n.id)
+                    .put("text", n.desc ?: "")
+                    .put("role", n.role ?: "")
+                    .put("fid", n.effectiveFid ?: "")
+                    .put("bounds", JSONArray(listOf(n.bounds.left, n.bounds.top, n.bounds.right, n.bounds.bottom)))
+                    .put("center", JSONArray(listOf(n.clickTarget.x, n.clickTarget.y))))
+            }
+        }
         return ok().put("matches", JSONArray(matches))
     }
 
-    /** 在快照树（数据层）中按选择器匹配，返回带 brief 编号的条目 */
-    private fun findInSnapshot(
-        compressed: LayoutCompressor.Compressed?,
-        selector: JSONObject,
-        limit: Int,
-        out: MutableList<JSONObject>,
-    ) {
-        val root = lastCapture?.root ?: return
-        val idByNode = compressed?.nodeMap?.entries?.associate { (id, node) -> node to id } ?: emptyMap()
-
-        fun nodeMatches(n: NodeInfo): Boolean {
-            val text = selector.optString("text", "")
-            if (text.isNotEmpty() && n.text?.contains(text) != true) return false
-            val desc = selector.optString("desc", "")
-            if (desc.isNotEmpty() && n.desc?.contains(desc) != true) return false
-            val id = selector.optString("id", "")
-            if (id.isNotEmpty()) {
-                val fullId = n.fullId ?: return false
-                if (!fullId.endsWith(id) && n.simpleId != id) return false
-            }
-            val cls = selector.optString("className", "")
-            if (cls.isNotEmpty() && n.className?.contains(cls) != true) return false
-            if (selector.has("clickable") && n.clickable != selector.getBoolean("clickable")) return false
-            if (selector.has("scrollable") && n.scrollable != selector.getBoolean("scrollable")) return false
-            if (selector.has("checkable") && n.checkable != selector.getBoolean("checkable")) return false
-            if (selector.has("editable") && n.editable != selector.getBoolean("editable")) return false
-            return true
+    /** v3 节点选择器匹配（text/desc 子串 → 清洗后 desc；id → fid 后缀/simpleId；className/布尔 → raw） */
+    private fun v3Match(n: LayoutV3.PNode, s: JSONObject): Boolean {
+        val text = s.optString("text", "")
+        if (text.isNotEmpty() && n.desc?.contains(text) != true) return false
+        val desc = s.optString("desc", "")
+        if (desc.isNotEmpty() && n.desc?.contains(desc) != true) return false
+        val id = s.optString("id", "")
+        if (id.isNotEmpty()) {
+            val fullId = n.effectiveFid ?: return false
+            if (!fullId.endsWith(id) && fullId.substringAfterLast("/id/").substringAfterLast('/') != id) return false
         }
-
-        fun dfs(n: NodeInfo) {
-            if (out.size >= limit) return
-            if (nodeMatches(n)) {
-                val item = JSONObject()
-                    .put("node_id", idByNode[n] ?: -1)
-                    .put("text", n.text ?: "")
-                    .put("desc", n.desc ?: "")
-                    .put("class", n.className ?: "")
-                    .put("bounds", JSONArray(listOf(n.boundsInScreen.left, n.boundsInScreen.top, n.boundsInScreen.right, n.boundsInScreen.bottom)))
-                    .put("center", JSONArray(listOf(n.center.x, n.center.y)))
-                    .put("clickable", n.clickable)
-                out.add(item)
-            }
-            n.children.forEach { dfs(it) }
-        }
-        dfs(root)
+        val cls = s.optString("className", "")
+        if (cls.isNotEmpty() && n.node.className?.contains(cls) != true) return false
+        if (s.has("clickable") && n.node.clickable != s.getBoolean("clickable")) return false
+        if (s.has("scrollable") && n.node.scrollable != s.getBoolean("scrollable")) return false
+        if (s.has("checkable") && n.node.checkable != s.getBoolean("checkable")) return false
+        if (s.has("editable") && n.node.editable != s.getBoolean("editable")) return false
+        return true
     }
 
     private fun getForegroundApp(): JSONObject {
@@ -325,8 +400,9 @@ class NativeToolRouter(private val context: Context) {
     // ---------- 操作类 ----------
 
     /**
-     * click / long_click（规格书 6.2）：
-     * node_id 存在 → 快照节点可 performAction 则节点动作，否则按快照坐标手势；x,y → 坐标手势。
+     * click / long_click（v3 配套机制）：
+     * node_id 存在 → rev 校验（可选）→ anchor 重定位（实时树重新定位 + 偏移校验）→ 新 safePoint 手势。
+     * x,y → 坐标手势。
      */
     private fun clickLike(args: JSONObject, long: Boolean): JSONObject {
         requireService()
@@ -334,40 +410,89 @@ class NativeToolRouter(private val context: Context) {
             val nodeId = args.getInt("node_id")
             val snapshot = lastSnapshot
                 ?: throw ToolException("no_snapshot", "尚无布局快照，请先调用 get_layout")
-            val node = snapshot.nodeMap[nodeId]
+            val old = snapshot.nodeMap[nodeId]
                 ?: throw ToolException("node_not_found", "节点 $nodeId 不在最近一次布局快照中")
-            guardSelfTarget(node)
-
-            val actionName = if (long) "longClick" else "click"
-            val actionConst = if (long) "ACTION_LONG_CLICK" else "ACTION_CLICK"
-            if (node.actionNames.contains(actionConst)) {
-                val selector = selectorFromSnapshotNode(node)
-                if (selector != null && actionExecutor.perform(selector, actionName)) {
-                    return ok().put("used", "node")
-                }
-            }
-            // 坐标兜底（快照过期由调用方重新 capture，见规格书 3.7/5.2）
-            val success = if (long) gestureExecutor.longClick(node.center.x, node.center.y)
-            else gestureExecutor.click(node.center.x, node.center.y)
+            checkRev(args, snapshot)
+            // anchor 重定位（失败即拒绝并回传新树提示）
+            val target = relocate(old, "click")
+            guardSelfTarget(target.node)
+            val pt = target.clickTarget
+            val success = if (long) gestureExecutor.longClick(pt.x, pt.y)
+            else gestureExecutor.click(pt.x, pt.y)
             if (!success) throw ToolException("gesture_failed", "手势分发失败")
-            return ok().put("used", "coordinate")
+            lastActionAt = System.currentTimeMillis()
+            val out = ok()
+                .put("used", "anchor")
+                .put("rev", lastSnapshot?.rev ?: "")
+            // 无变化检测（配套机制 4）：动作前后 rev 相同 → 明确告知（点击可能未生效）
+            if (lastSnapshot?.rev == snapshot.rev) {
+                out.put("notice", "页面无变化，点击可能未生效，请重新 get_layout 确认")
+            }
+            return out
         }
         if (args.has("x") && args.has("y")) {
             val x = args.getInt("x"); val y = args.getInt("y")
             val success = if (long) gestureExecutor.longClick(x, y) else gestureExecutor.click(x, y)
             if (!success) throw ToolException("gesture_failed", "手势分发失败")
+            lastActionAt = System.currentTimeMillis()
             return ok().put("used", "coordinate")
         }
         throw ToolException("missing_param", "click 需要 node_id 或 x,y")
     }
 
-    /** 由快照节点重建选择器（优先 id → text → desc，唯一性靠 bounds 二次确认） */
-    private fun selectorFromSnapshotNode(node: NodeInfo): JSONObject? {
+    /** rev 校验（可选参数：LLM 携带最近一次 get_layout 的 rev，不匹配即拒绝） */
+    private fun checkRev(args: JSONObject, snapshot: LayoutV3.Result) {
+        if (args.has("rev") && args.getString("rev") != snapshot.rev) {
+            throw ToolException(
+                "page_changed",
+                "页面已变化（rev 不匹配 ${args.getString("rev")} vs ${snapshot.rev}），请重新 get_layout 观察后重试"
+            )
+        }
+    }
+
+    /**
+     * anchor 重定位（v3 配套机制 2）：重新捕获布局 → 简化 → 找 anchor 相同节点。
+     * 找不到 → 拒绝（页面已变化）；偏移 > 原节点最大边长 60% → 拒绝（目标位置已变）。
+     * 无论成败都刷新会话快照（对齐新编号），失败时错误消息带新 rev。
+     */
+    private fun relocate(old: LayoutV3.PNode, needAct: String?): LayoutV3.PNode {
+        settleIfNeeded()
+        val fresh = layoutInspector.captureNow()
+            ?: throw ToolException("capture_failed", "无法获取当前窗口布局（无根节点）")
+        val result = LayoutV3.simplify(context, fresh)
+        lastSnapshot = result
+        val target = result.nodeMap.values.firstOrNull { it.anchor == old.anchor }
+            ?: throw ToolException(
+                "page_changed",
+                "目标位置已变（页面已变化 rev=${result.rev}），请重新 get_layout 观察"
+            )
+        if (needAct != null && !target.acts.contains(needAct) && !target.acts.any { it.startsWith("scroll") }) {
+            throw ToolException(
+                "page_changed",
+                "目标已不可交互（页面已变化 rev=${result.rev}），请重新 get_layout 观察"
+            )
+        }
+        // 偏移校验：中心点位移超过原节点最大边长 60% → 目标位置已变
+        val d = hypot(
+            target.clickTarget.x - old.center.x.toDouble(),
+            target.clickTarget.y - old.center.y.toDouble()
+        )
+        val maxDim = max(old.bounds.width(), old.bounds.height()).toDouble()
+        if (d > maxDim * 0.6) {
+            throw ToolException(
+                "page_changed",
+                "目标位置已变（偏移过大 rev=${result.rev}），请重新 get_layout 观察"
+            )
+        }
+        return target
+    }
+
+    /** 由 v3 节点重建实时选择器（优先 fid → desc），供 node_action/scroll 走 performAction */
+    private fun selectorFromV3(n: LayoutV3.PNode): JSONObject? {
         val selector = JSONObject()
         when {
-            !node.simpleId.isNullOrEmpty() -> selector.put("id", node.simpleId)
-            !node.text.isNullOrEmpty() -> selector.put("text", node.text)
-            !node.desc.isNullOrEmpty() -> selector.put("desc", node.desc)
+            !n.effectiveFid.isNullOrEmpty() -> selector.put("id", n.effectiveFid)
+            !n.desc.isNullOrEmpty() -> selector.put("text", n.desc)
             else -> return null
         }
         return selector
@@ -415,12 +540,15 @@ class NativeToolRouter(private val context: Context) {
         val nodeId = args.getInt("node_id")
         val snapshot = lastSnapshot
             ?: throw ToolException("no_snapshot", "尚无布局快照，请先调用 get_layout")
-        val node = snapshot.nodeMap[nodeId]
+        val old = snapshot.nodeMap[nodeId]
             ?: throw ToolException("node_not_found", "节点 $nodeId 不在最近一次布局快照中")
-        guardSelfTarget(node)
+        checkRev(args, snapshot)
+        // anchor 重定位（失败即拒绝并回传新树提示）
+        val target = relocate(old, null)
+        guardSelfTarget(target.node)
 
-        val selector = selectorFromSnapshotNode(node)
-            ?: throw ToolException("no_selector", "节点 $nodeId 无法构造选择器（无 id/text/desc）")
+        val selector = selectorFromV3(target)
+            ?: throw ToolException("no_selector", "节点 $nodeId 无法构造选择器（无 fid/desc）")
         val actionArgs = JSONObject()
         args.optString("text", "").takeIf { it.isNotEmpty() }?.let { actionArgs.put("text", it) }
         args.optJSONObject("args")?.let { extra ->
@@ -429,6 +557,7 @@ class NativeToolRouter(private val context: Context) {
         if (!actionExecutor.perform(selector, action, actionArgs)) {
             throw ToolException("action_failed", "节点动作 $action 执行失败（节点可能不支持该动作）")
         }
+        lastActionAt = System.currentTimeMillis()
         return ok()
     }
 
@@ -450,10 +579,13 @@ class NativeToolRouter(private val context: Context) {
         if (selector == null && args.has("node_id")) {
             val snapshot = lastSnapshot
                 ?: throw ToolException("no_snapshot", "尚无布局快照，请先调用 get_layout")
-            val node = snapshot.nodeMap[args.getInt("node_id")]
+            val old = snapshot.nodeMap[args.getInt("node_id")]
                 ?: throw ToolException("node_not_found", "节点不在最近一次布局快照中")
-            guardSelfTarget(node)
-            selector = selectorFromSnapshotNode(node)
+            checkRev(args, snapshot)
+            // anchor 重定位（失败即拒绝并回传新树提示）
+            val target = relocate(old, null)
+            guardSelfTarget(target.node)
+            selector = selectorFromV3(target)
         }
         val text = args.optString("text", "").takeIf { it.isNotEmpty() }
         val method = textInput.paste(selector, text)
@@ -497,24 +629,40 @@ class NativeToolRouter(private val context: Context) {
         return ok()
     }
 
+    /**
+     * 停止指定应用（结束其进程，Run_script 前清理干扰软件用）。
+     *
+     * 仅 root 路径：`am force-stop`（最可靠）。无 root 时返回 root_required 错误，
+     * 提示用户手动关闭应用（不做不可靠降级尝试）。
+     */
+    private fun stopApp(args: JSONObject): JSONObject {
+        val pkg = requireString(args, "package_name")
+        return appStopper.stop(pkg)
+    }
+
     private fun scroll(args: JSONObject): JSONObject {
         requireService()
         val direction = requireString(args, "direction")
         val times = args.optInt("times", 1).coerceIn(1, 20)
+        val actionFor = { d: String ->
+            when (d) {
+                "up" -> "scrollBackward"; "down" -> "scrollForward"
+                "left" -> "scrollLeft"; "right" -> "scrollRight"
+                else -> throw ToolException("bad_param", "未知滚动方向: $d")
+            }
+        }
         repeat(times) {
             val success = if (args.has("node_id")) {
                 val snapshot = lastSnapshot
                     ?: throw ToolException("no_snapshot", "尚无布局快照，请先调用 get_layout")
-                val node = snapshot.nodeMap[args.getInt("node_id")]
+                val old = snapshot.nodeMap[args.getInt("node_id")]
                     ?: throw ToolException("node_not_found", "节点不在最近一次布局快照中")
-                val selector = selectorFromSnapshotNode(node)
+                checkRev(args, snapshot)
+                // anchor 重定位（失败即拒绝并回传新树提示）
+                val target = relocate(old, null)
+                val selector = selectorFromV3(target)
                     ?: throw ToolException("no_selector", "节点无法构造选择器")
-                val action = when (direction) {
-                    "up" -> "scrollBackward"; "down" -> "scrollForward"
-                    "left" -> "scrollLeft"; "right" -> "scrollRight"
-                    else -> throw ToolException("bad_param", "未知滚动方向: $direction")
-                }
-                actionExecutor.perform(selector, action)
+                actionExecutor.perform(selector, actionFor(direction))
             } else {
                 // 屏幕内滑动（up=内容向上滚=手指下滑到上，即向上轻扫）
                 val cx = getScreenWidth() / 2
@@ -530,6 +678,7 @@ class NativeToolRouter(private val context: Context) {
             if (!success) throw ToolException("scroll_failed", "滚动失败（方向: $direction）")
             if (times > 1) Thread.sleep(350)
         }
+        lastActionAt = System.currentTimeMillis()
         return ok()
     }
 
@@ -548,12 +697,10 @@ class NativeToolRouter(private val context: Context) {
         val deadline = System.currentTimeMillis() + timeout
         while (System.currentTimeMillis() < deadline) {
             val found = runCatching {
-                val (capture, compressed) = captureLayout("brief")
-                val matches = mutableListOf<JSONObject>()
-                findInSnapshot(compressed, selector, 1, matches)
-                matches.firstOrNull()
+                val (_, v3) = captureLayout("brief")
+                v3?.nodeMap?.values?.firstOrNull { v3Match(it, selector) }
             }.getOrNull()
-            if (found != null) return ok().put("node_id", found.optInt("node_id", -1))
+            if (found != null) return ok().put("node_id", found.id)
             Thread.sleep(WAIT_POLL_INTERVAL_MS)
         }
         return JSONObject().put("ok", false)
@@ -567,12 +714,10 @@ class NativeToolRouter(private val context: Context) {
         val deadline = System.currentTimeMillis() + timeout
         while (System.currentTimeMillis() < deadline) {
             val found = runCatching {
-                val (_, compressed) = captureLayout("brief")
-                val matches = mutableListOf<JSONObject>()
-                findInSnapshot(compressed, selector, 1, matches)
-                matches.firstOrNull()
+                val (_, v3) = captureLayout("brief")
+                v3?.nodeMap?.values?.firstOrNull { v3Match(it, selector) }
             }.getOrNull()
-            if (found != null) return ok().put("node_id", found.optInt("node_id", -1))
+            if (found != null) return ok().put("node_id", found.id)
             Thread.sleep(WAIT_POLL_INTERVAL_MS)
         }
         return JSONObject().put("ok", false)

@@ -90,29 +90,6 @@ function FilterChip({
   );
 }
 
-function TopAction({
-  icon: Icon,
-  label,
-  onClick,
-}: {
-  icon: typeof Plus;
-  label: string;
-  onClick: () => void;
-}) {
-  return (
-    <motion.button
-      type="button"
-      whileTap={{ scale: 0.94 }}
-      transition={{ duration: 0.15, ease: APPLE_CURVE }}
-      onClick={onClick}
-      className="flex flex-col items-center gap-1.5 rounded-[18px] border border-border bg-background/80 backdrop-blur-xl py-3 text-muted-foreground hover:text-foreground hover:bg-muted/40 transition-colors"
-    >
-      <Icon size={16} />
-      <span className="text-[10px] font-medium">{label}</span>
-    </motion.button>
-  );
-}
-
 function NewSkillDialog({
   onClose,
   onSubmit,
@@ -413,28 +390,44 @@ export function SkillPanel({ width = 400 }: SkillPanelProps) {
                   )}
                 </AnimatePresence>
 
-                {/* 标题栏 */}
+                {/* 标题栏 + 顶部操作：新建 / 设置 在刷新按钮左侧 */}
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground uppercase tracking-[0.2em]">
                     <ScrollText size={12} />
                     技能
                   </div>
-                  <motion.button
-                    type="button"
-                    whileTap={{ scale: 0.9 }}
-                    transition={{ duration: 0.15, ease: APPLE_CURVE }}
-                    onClick={() => void refresh()}
-                    className="flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
-                    aria-label="刷新技能列表"
-                  >
-                    <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-                  </motion.button>
-                </div>
-
-                {/* 顶部操作：新建 / 设置 */}
-                <div className="grid grid-cols-2 gap-2">
-                  <TopAction icon={Plus} label="新建" onClick={() => setNewDialogOpen(true)} />
-                  <TopAction icon={Settings2} label="设置" onClick={handleOpenSettings} />
+                  <div className="flex items-center gap-1.5">
+                    <motion.button
+                      type="button"
+                      whileTap={{ scale: 0.9 }}
+                      transition={{ duration: 0.15, ease: APPLE_CURVE }}
+                      onClick={() => setNewDialogOpen(true)}
+                      className="flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+                      aria-label="新建技能"
+                    >
+                      <Plus size={13} />
+                    </motion.button>
+                    <motion.button
+                      type="button"
+                      whileTap={{ scale: 0.9 }}
+                      transition={{ duration: 0.15, ease: APPLE_CURVE }}
+                      onClick={handleOpenSettings}
+                      className="flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground"
+                      aria-label="技能设置"
+                    >
+                      <Settings2 size={13} />
+                    </motion.button>
+                    <motion.button
+                      type="button"
+                      whileTap={{ scale: 0.9 }}
+                      transition={{ duration: 0.15, ease: APPLE_CURVE }}
+                      onClick={() => void refresh()}
+                      className="flex h-7 w-7 items-center justify-center rounded-full text-muted-foreground hover:bg-muted/60 hover:text-foreground transition-colors"
+                      aria-label="刷新技能列表"
+                    >
+                      <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+                    </motion.button>
+                  </div>
                 </div>
 
                 {/* 搜索栏 */}

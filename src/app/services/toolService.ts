@@ -304,3 +304,40 @@ export interface GcReport {
 export async function runGc(): Promise<GcReport> {
   return backendPost<GcReport>('/api/files/gc', {});
 }
+
+// ─── 悬浮窗授权（Android 后台场景） ────────────────────────────────────────
+
+export interface ApprovalNotifyParams {
+  chatId: string;
+  messageId: string;
+  toolId: string;
+  toolName: string;
+  input: unknown;
+  description?: string;
+}
+
+export interface ApprovalResult {
+  messageId: string;
+  toolId: string;
+  decision: 'approve' | 'always_approve' | 'reject';
+}
+
+/**
+ * 请求显示授权悬浮窗（工具权限询问时调用；后端转发 Kotlin 桥。
+ * 应用在前台时 Kotlin 侧不显示，由应用内授权卡片处理）。
+ * 路由：POST /api/approval/notify
+ */
+export async function notifyApproval(params: ApprovalNotifyParams): Promise<void> {
+  await backendPost('/api/approval/notify', params);
+}
+
+/**
+ * 轮询消费悬浮窗授权结果（取出即删，避免重复处理）。
+ * 路由：GET /api/approval/results?chatId=...
+ */
+export async function fetchApprovalResults(chatId: string): Promise<ApprovalResult[]> {
+  const res = await backendGet<{ results: ApprovalResult[] }>(
+    `/api/approval/results?chatId=${encodeURIComponent(chatId)}`,
+  );
+  return res.results ?? [];
+}

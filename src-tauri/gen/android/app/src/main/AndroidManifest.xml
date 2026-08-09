@@ -1,6 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 后台保活：前台服务（任务期间提升进程优先级） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 电池优化白名单引导（用户自愿开启，未授权不影响使用） -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <!-- AI 活动悬浮窗（TYPE_APPLICATION_OVERLAY，显示实时活动状态） -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <!-- AI 活动期间屏幕常亮（后台任务防息屏，任务结束/停止时释放） -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 停止其他应用（stop_app 工具：Run_script 前清理干扰软件） -->
+    <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES" />
 
     <!-- Android 11+ 包可见性：允许查询/启动所有带启动入口的第三方应用（launch_app 依赖） -->
     <queries>
@@ -45,6 +57,16 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/accessibility_service_config" />
+        </service>
+
+        <!-- 后台保活前台服务（specialUse 类型，Android 14+ 需声明用途说明） -->
+        <service
+            android:name=".bridge.VentureKeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Agent 任务（AI 生成/自动化脚本执行）期间保持进程存活，结束后自动停止" />
         </service>
 
         <provider
