@@ -3,9 +3,23 @@ name = "venture-backend"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+name = "venture_backend"
+path = "src/lib.rs"
+
 [[bin]]
 name = "venture-backend"
 path = "src/main.rs"
+
+# 子代理独立进程（桌面端 ACP over stdio；Android 端不产出）
+[[bin]]
+name = "subagent-proc"
+path = "src/bin/subagent_proc.rs"
+
+[features]
+# 桌面端子进程运行模式（Android 端编译不启用）
+default = ["subagent-proc"]
+subagent-proc = []
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -42,6 +56,8 @@ flate2 = "1"
 # skill 系统（§6.3 实现依赖注）：yaml-rust2 解析 SKILL.md frontmatter（serde_yaml 已弃用）/ zip 导入（含 §9.3 安全校验）
 yaml-rust2 = "0.8"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# 子代理系统：rhai 确定性 workflow DSL（§14）
+rhai = "1"
 
 [dev-dependencies]
 tempfile = "3"

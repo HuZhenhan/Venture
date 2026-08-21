@@ -19,6 +19,7 @@ import {
   serializeError,
 } from '../utils/messageContentProtocol';
 import { executeTool } from '../services/toolService';
+import { useSubagentStore } from '../store/useSubagentStore';
 import { usePreferencesStore } from '../store/usePreferencesStore';
 import { debugError } from '../utils/debugLogger';
 import {
@@ -339,6 +340,7 @@ export function useGeneration() {
             input: tool.input,
             chatId,
             turnMessageId,
+            modelId,
           });
           const status: ToolCallStatus = result.isError ? 'failed' : 'completed';
           updatedTools = updatedTools.map((t) =>
@@ -532,6 +534,21 @@ export function useGeneration() {
         return;
       }
 
+      // 子代理后台完成事件注入（设计稿 §7.5 / §17#2）：
+      // 每轮用户消息发送前，把未消费的后台子代理完成摘要拼入消息前缀，
+      // 模型无需 sleep/poll——完成事件会自动注入。
+      const subagentReminders: string[] = [];
+      if (!isContinue) {
+        const completions = useSubagentStore
+          .getState()
+          .consumeCompletionsForChat(chatId);
+        for (const c of completions) {
+          subagentReminders.push(
+            `[后台子代理完成] 子代理任务 ${c.taskId} 已${c.state === 'completed' ? '完成' : '失败'}：${c.summary}\n完整结果：get_agent_output { "agent_id": "${c.taskId}" }`,
+          );
+        }
+      }
+
       // 构建 API 消息列表：展开 assistant 消息中的 tool_calls 为 assistant+tool 消息对。
       // continue 模式会在同一条消息中累积多轮工具循环（文字与 tool_calls 追加拼接）。
       // 若按整条消息原样发送（content 拼接 + 全部 tool_calls），模型无法区分轮次边界，
@@ -651,6 +668,25 @@ export function useGeneration() {
       // 让模型从断点继续补全（而非重新生成）
       if (resumeContent) {
         apiMessages.push({ role: 'assistant', content: resumeContent });
+      }
+
+      // 子代理完成摘要注入：作为最后一条用户消息的前缀（§7.5 注入格式）。
+      // 放在消息序列末尾（紧邻新一轮生成），确保模型最先看到后台任务结果。
+      if (subagentReminders.length > 0) {
+        const last = apiMessages[apiMessages.length - 1];
+        const reminderText = subagentReminders.join('\n\n');
+        if (last && last.role === 'user') {
+          if (typeof last.content === 'string') {
+            last.content = `${last.content}\n\n${reminderText}`;
+          } else if (Array.isArray(last.content)) {
+            last.content = [
+              { type: 'text', text: reminderText },
+              ...last.content,
+            ];
+          }
+        } else {
+          apiMessages.push({ role: 'user', content: reminderText });
+        }
       }
 
       // Set up trace recording if debug mode is on and this chat is being traced

@@ -12,15 +12,17 @@ export interface ExecuteToolResult {
 }
 
 export interface ExecuteToolParams {
-  /** 工具名（Write/Edit/Glob/Grep/TaskCreate/...）。 */
+  /** 工具名（Write/Edit/Glob/Grep/TodoCreate/spawn_agent/...）。 */
   tool: string;
   /** 已解析的工具输入参数。 */
   input: unknown;
-  /** 当前会话 ID，任务工具按此隔离。 */
+  /** 当前会话 ID，todo 工具按此隔离。 */
   chatId: string;
   /** 当前轮次的消息 ID（用于文件回退系统的 turn 级关联）。
    *  提供时触发备份流程，不提供时跳过备份（向后兼容）。 */
   turnMessageId?: string;
+  /** 当前会话模型 ID（子代理 spawn_agent 工具的 inherit 语义；设计稿 §18.1 #6）。 */
+  modelId?: string;
 }
 
 /**
@@ -37,6 +39,7 @@ export async function executeTool(params: ExecuteToolParams): Promise<ExecuteToo
       input: params.input ?? {},
       chatId: params.chatId,
       ...(params.turnMessageId ? { turnMessageId: params.turnMessageId } : {}),
+      ...(params.modelId ? { modelId: params.modelId } : {}),
     },
   );
   return {
@@ -46,15 +49,18 @@ export async function executeTool(params: ExecuteToolParams): Promise<ExecuteToo
   };
 }
 
-// ─── 任务管理 CRUD ──────────────────────────────────────────────────────────
+// ─── 清单（todo）CRUD ───────────────────────────────────────────────────────
+//
+// 说明：REST 路径与字段保留 task 命名（内部协议，与后端 task_store.rs 一致）；
+// 模型侧的工具名是 TodoCreate/TodoUpdate/TodoList/TodoGet（与子代理 spawn_agent 区分）。
 //
 // 路由约定：
-//   GET    /api/tasks?chatId=xxx          — 列出会话下所有任务
-//   POST   /api/tasks                     — 创建任务（body 含 chatId）
-//   GET    /api/tasks/:id?chatId=xxx      — 获取单个任务
-//   PATCH  /api/tasks/:id?chatId=xxx      — 更新任务
+//   GET    /api/tasks?chatId=xxx          — 列出会话下所有清单项
+//   POST   /api/tasks                     — 创建清单项（body 含 chatId）
+//   GET    /api/tasks/:id?chatId=xxx      — 获取单个清单项
+//   PATCH  /api/tasks/:id?chatId=xxx      — 更新清单项
 
-/** 后端任务状态（与 backend task_store.rs 对齐）。 */
+/** 后端清单状态（与 backend task_store.rs 对齐）。 */
 export type BackendTaskStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
 
 const STATUS_LABELS: Record<BackendTaskStatus, string> = {
@@ -64,7 +70,7 @@ const STATUS_LABELS: Record<BackendTaskStatus, string> = {
   failed: '失败',
 };
 
-/** 后端 Task 结构（与 backend task_store.rs 对齐）。 */
+/** 后端清单结构（与 backend task_store.rs 对齐）。 */
 export interface BackendTask {
   id: string;
   subject: string;

@@ -109,7 +109,7 @@ pub struct StreamChunk {
     pub usage: Option<UsageInfo>,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct UsageInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_tokens: Option<u32>,

@@ -140,6 +140,10 @@
       {
         "from": "backend/target/release/venture-backend.exe",
         "to": "venture-backend.exe"
+      },
+      {
+        "from": "backend/target/release/subagent-proc.exe",
+        "to": "subagent-proc.exe"
       }
     ],
     "directories": {

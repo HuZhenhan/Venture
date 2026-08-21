@@ -88,7 +88,7 @@ pub struct ConfigStore {
     persist_lock: tokio::sync::Mutex<()>,
 }
 
-pub(crate) fn app_data_dir() -> Result<PathBuf> {
+pub fn app_data_dir() -> Result<PathBuf> {
     if let Ok(appdata) = std::env::var("APPDATA") {
         return Ok(PathBuf::from(appdata).join("Venture"));
     }

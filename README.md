@@ -56,11 +56,11 @@ npm run installer
 
 ## 项目特性
 
--  **现代化 UI** - React 18 + Tailwind CSS
--  **深色/浅色主题** - 完整的主题系统
--  **强大的后端** - Rust + Axum 高性能
--  **跨平台** - 基于 Electron
--  **模块化架构** - 清晰的功能划分
+- **现代化 UI** - React 18 + Tailwind CSS
+- **深色/浅色主题** - 完整的主题系统
+- **强大的后端** - Rust + Axum 高性能
+- **跨平台** - 基于 Electron
+- **模块化架构** - 清晰的功能划分
 
 ## 项目结构
 
