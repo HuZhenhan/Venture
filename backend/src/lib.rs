@@ -11,6 +11,7 @@ pub mod script;
 pub mod skill;
 pub mod task_store;
 pub mod tools;
+pub mod subagent;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -19,13 +20,15 @@ use std::sync::Arc;
 use axum::{
     extract::{DefaultBodyLimit, Path, Query, State},
     http::Method,
+    response::sse::{Event, KeepAlive, Sse},
     routing::{get, patch, post},
     Json, Router,
 };
+use futures_util::Stream;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::info;
 
@@ -51,6 +54,8 @@ pub(crate) struct AppState {
     pub(crate) keepalive: keepalive::KeepAlive,
     /// 悬浮窗授权结果（key: chatId → 待前端消费的队列；取出即删）
     pub(crate) approvals: Arc<Mutex<HashMap<String, Vec<ApprovalResult>>>>,
+    /// 子代理系统（task 工具 / SSE 事件 / 权限审批；设计稿 §1/§6/§7.5/§11.2）
+    pub(crate) subagents: Arc<subagent::task_tool::Subagents>,
     startup_nonce: String,
 }
 
@@ -119,6 +124,9 @@ struct ExecuteToolRequest {
     /// 提供时触发备份流程，不提供时跳过备份（向后兼容）。
     #[serde(default)]
     turn_message_id: Option<String>,
+    /// 当前会话模型 ID（子代理 task 工具的 inherit 语义；设计稿 §18.1 #6）
+    #[serde(default)]
+    model_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -349,6 +357,24 @@ async fn execute_tool_handler(
     Json(body): Json<ExecuteToolRequest>,
 ) -> Result<Json<Value>, AppError> {
     let ws = workspace_root();
+    // 子代理调度类工具：路由到 Subagents 门面（设计稿 §6 适配说明）
+    if matches!(
+        body.tool.as_str(),
+        "spawn_agent" | "get_agent_output" | "kill_agent" | "run_workflow" | "kill_workflow"
+    ) {
+        let ctx = subagent::task_tool::ToolCallContext {
+            chat_id: body.chat_id.clone(),
+            turn_message_id: body.turn_message_id.clone(),
+            workspace_root: ws.clone(),
+            inherited_model: body.model_id.clone(),
+        };
+        let (output, is_error) = s.subagents.execute_tool(&body.tool, &body.input, &ctx).await;
+        return Ok(Json(json!({
+            "output": output,
+            "isError": is_error,
+            "structured": null,
+        })));
+    }
     let result = tools::execute_and_serialize(
         &body.tool,
         &body.input,
@@ -969,6 +995,108 @@ async fn sync_status_handler(
     }
 }
 
+// ─── 子代理系统 API（设计稿 §7.5 / §11.2 / §13.2）───────────────────────
+
+/// SSE 事件流：subagent_completed / subagent_permission_request /
+/// subagent_state / subagent_progress / subagent_failed。
+async fn subagent_events_handler(
+    State(s): State<AppState>,
+) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
+    let mut rx = s.subagents.handle.subscribe();
+    let stream = async_stream::stream! {
+        loop {
+            match rx.recv().await {
+                Ok(ev) => {
+                    let data = json!({
+                        "type": ev.kind,
+                        "chatId": ev.chat_id,
+                        "taskId": ev.task_id,
+                        "data": ev.payload,
+                    });
+                    let event = Event::default()
+                        .event(ev.kind)
+                        .json_data(data)
+                        .unwrap_or_else(|_| Event::default().event(ev.kind).data("{}"));
+                    yield Ok(event);
+                }
+                Err(broadcast::error::RecvError::Lagged(missed)) => {
+                    let event = Event::default()
+                        .event("lagged")
+                        .json_data(json!({ "missed": missed }))
+                        .unwrap_or_else(|_| Event::default().event("lagged").data("{}"));
+                    yield Ok(event);
+                }
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    };
+    Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+/// 完成缓冲拉取（SSE 断线补齐；拉取即消费，§7.5）。
+async fn subagent_completed_handler(State(s): State<AppState>) -> Json<Value> {
+    let snapshot = s.subagents.handle.completed_snapshot().await;
+    Json(json!({ "completed": snapshot }))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubagentPermissionDecisionRequest {
+    /// approve | always_approve | reject
+    decision: String,
+}
+
+/// 权限审批决策回填（§11.2 Ask 效果：SSE 横幅 / 悬浮窗决策统一入口）。
+async fn subagent_permission_decision_handler(
+    State(s): State<AppState>,
+    Path(request_id): Path<String>,
+    Json(body): Json<SubagentPermissionDecisionRequest>,
+) -> Json<Value> {
+    let (decision, remember) = match body.decision.as_str() {
+        "approve" => ("allow", false),
+        "always_approve" => ("allow", true),
+        _ => ("deny", false),
+    };
+    s.subagents
+        .handle
+        .permission_decision(&request_id, decision, remember);
+    Json(json!({ "success": true }))
+}
+
+/// 子代理配置读取（设置页）。
+async fn get_subagent_config_handler(State(s): State<AppState>) -> Json<Value> {
+    let cfg = s.subagents.config.read().unwrap().clone();
+    Json(serde_json::to_value(&cfg).unwrap_or_default())
+}
+
+/// 子代理配置更新（设置页）。
+async fn update_subagent_config_handler(
+    State(s): State<AppState>,
+    Json(body): Json<subagent::types::SubagentConfig>,
+) -> Result<Json<Value>, AppError> {
+    subagent::update_config(&s.subagents, body)
+        .map_err(AppError::ToolExecutionError)?;
+    Ok(Json(json!({ "success": true })))
+}
+
+/// 可用 agent 列表（设置页 / 调试）。
+async fn list_subagent_agents_handler(State(s): State<AppState>) -> Json<Value> {
+    let registry = s.subagents.registry.read().unwrap();
+    let agents: Vec<Value> = registry
+        .visible_agents()
+        .iter()
+        .map(|d| {
+            json!({
+                "name": d.name,
+                "description": d.description,
+                "capabilityMode": d.capability_mode.map(|c| c.as_str()),
+                "hidden": d.hidden,
+            })
+        })
+        .collect();
+    Json(json!({ "agents": agents }))
+}
+
 async fn run_gc_handler(
     State(s): State<AppState>,
 ) -> Result<Json<Value>, AppError> {
@@ -1061,7 +1189,31 @@ pub async fn run_server(data_dir: Option<PathBuf>) -> anyhow::Result<()> {
     // 后台保活客户端（复用原生桥 base_url；桌面端无桥时自动禁用）
     let keepalive = keepalive::KeepAlive::from_env();
 
-    let state = AppState { store, app_data, http, task_store, read_tracker, file_history, skill_service, agent_router, keepalive, approvals: Arc::new(Mutex::new(HashMap::new())), startup_nonce };
+    // 子代理系统（设计稿 §1/§16）：进程内通道（InProcessRunner）全量初始化
+    let subagent_data_dir = config::app_data_dir(data_dir.as_ref())
+        .unwrap_or_else(|_| PathBuf::from("."));
+    let subagent_config = {
+        let cfg_path = subagent_data_dir.join("subagent_config.json");
+        if let Ok(content) = std::fs::read_to_string(&cfg_path) {
+            serde_json::from_str::<subagent::types::SubagentConfig>(&content)
+                .unwrap_or_default()
+        } else {
+            subagent::types::SubagentConfig::default()
+        }
+    };
+    let subagents = subagent::init(subagent::SubagentSystemDeps {
+        store: store.clone(),
+        http: http.clone(),
+        task_store: task_store.clone(),
+        file_history: file_history.clone(),
+        read_tracker: read_tracker.clone(),
+        skill_service: Some(skill_service.clone()),
+        data_dir: subagent_data_dir,
+        workspace_root: workspace_root(),
+        config: subagent_config,
+    });
+
+    let state = AppState { store, app_data, http, task_store, read_tracker, file_history, skill_service, agent_router, keepalive, approvals: Arc::new(Mutex::new(HashMap::new())), subagents, startup_nonce };
 
     let cors = CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(
@@ -1118,6 +1270,19 @@ pub async fn run_server(data_dir: Option<PathBuf>) -> anyhow::Result<()> {
         .route("/api/files/sync-out", post(sync_out_handler))
         .route("/api/files/sync-status", get(sync_status_handler))
         .route("/api/files/gc", post(run_gc_handler))
+        // 子代理系统（设计稿 §6/§7.5/§11.2/§13.2）：
+        // SSE 事件流 / 完成缓冲拉取 / 权限审批决策 / 配置管理 / agent 列表
+        .route("/api/subagents/events", get(subagent_events_handler))
+        .route("/api/subagents/completed", get(subagent_completed_handler))
+        .route(
+            "/api/subagents/permissions/:request_id",
+            post(subagent_permission_decision_handler),
+        )
+        .route(
+            "/api/subagents/config",
+            get(get_subagent_config_handler).put(update_subagent_config_handler),
+        )
+        .route("/api/subagents/agents", get(list_subagent_agents_handler))
         // 手机助手 Agent（规格书 8.1）：通用工具调用 / schema 同步 / 执行轨迹 / 桥健康 / 权限引导
         .route("/api/agent/tool", post(agent_tool_handler))
         .route("/api/agent/tool-schemas", get(agent_tool_schemas_handler))

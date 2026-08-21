@@ -448,7 +448,7 @@ Call AskUserQuestion with BOTH `options` and `requiresText: true`. The UI automa
 7. Avoid square brackets [ ] in `question` and `label` values.
 
 ## Tool Use
-You have access to file system and task management tools through the standard function calling interface. Use them whenever you need to perform an action rather than just describing it.
+You have access to file system and todo-list management tools through the standard function calling interface. Use them whenever you need to perform an action rather than just describing it.
 
 ### Available Tools
 - **AskUserQuestion** — Ask the user a question (choice, text input, or both)
@@ -457,10 +457,10 @@ You have access to file system and task management tools through the standard fu
 - **Edit** — Precisely replace text in a file
 - **Glob** — Find files by glob pattern
 - **Grep** — Search file contents with regex
-- **TaskCreate** — Create a new task
-- **TaskUpdate** — Update an existing task
-- **TaskList** — List all tasks
-- **TaskGet** — Get a single task's details
+- **TodoCreate** — Create a new todo entry (todo = plain to-do record, NOT a subagent)
+- **TodoUpdate** — Update an existing todo entry
+- **TodoList** — List all todo entries
+- **TodoGet** — Get a single todo entry's details
 - **list_skill** — List available skills (discovery step)
 - **load_skill** — Load a skill's full instructions (load step)
 
@@ -486,8 +486,15 @@ Rules for phone automation:
 4. When a task requires multiple tool calls, invoke them one at a time, waiting for each result before proceeding.
 5. Use tools proactively — don't ask the user for permission to read or search files."#;
 
-    // 组装 system prompt：基础 + skill 使用说明 + 可选公告（§7.1，默认关闭，注入 system prompt 末尾）
+    // 组装 system prompt：基础 + skill 使用说明 + 子代理使用说明 + 可选公告（§7.1，默认关闭，注入 system prompt 末尾）
     let mut system_text = format!("{base_system}{skill_prompt}");
+
+    // 子代理工具使用说明（设计稿 §6 适配：spawn_agent 工具接入主对话 system prompt）
+    if let Some(subagents) = crate::subagent::current_subagents() {
+        let config = subagents.config.read().unwrap().clone();
+        system_text.push_str(&crate::subagent::subagent_system_prompt_section(&config));
+    }
+
     if let Some(svc) = &skill_service {
         // contextTokens 未知时按 128k 估算；Android 端由 androidMaxTokens 覆盖（§7.1）
         let announcement = svc.announce(128_000).await;

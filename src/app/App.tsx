@@ -2,6 +2,8 @@ import { useEffect } from "react";
 import { MainLayout } from "./components/MainLayout";
 import { BackExitConfirmDialog } from "./components/BackExitConfirmDialog";
 import { FpsOverlay } from "./components/debug/FpsOverlay";
+import { SubagentPermissionBanner } from "./components/SubagentPermissionBanner";
+import { useSubagentStore } from "./store/useSubagentStore";
 import { useThemeStore } from "./store/useThemeStore";
 import { useChatStore } from "./store/useChatStore";
 import { usePreferencesStore } from "./store/usePreferencesStore";
@@ -30,6 +32,8 @@ export default function App() {
 
   useEffect(() => {
     debugLog("app", "App mounted");
+    // 子代理系统：SSE 事件订阅（完成通知 / 权限审批，设计稿 §7.5 / §11.2）
+    useSubagentStore.getState().init();
     getAppData()
       .then((data) => {
         useChatStore
@@ -86,6 +90,8 @@ export default function App() {
   return (
     <>
       <MainLayout />
+      {/* 子代理权限审批横幅 + SSE 事件订阅（设计稿 §11.2 / §7.5） */}
+      <SubagentPermissionBanner />
       <FpsOverlay />
       <BackExitConfirmDialog />
     </>

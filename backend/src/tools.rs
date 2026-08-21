@@ -7,7 +7,7 @@
 //!
 //! 支持的工具分两类：
 //! - 文件系统工具：`Write` / `Edit` / `Read` / `Glob` / `Grep`
-//! - 任务管理工具：`TaskCreate` / `TaskUpdate` / `TaskList` / `TaskGet`
+//! - 清单工具：`TodoCreate` / `TodoUpdate` / `TodoList` / `TodoGet`（与子代理 spawn_agent 工具区分）
 //!
 //! 安全设计：
 //! - 路径解析时阻止穿越到工作区根之外（若配置了 workspace_root）；
@@ -205,10 +205,10 @@ pub async fn execute_tool(
         "Glob" => execute_glob(input, workspace_root).await,
         "Grep" => execute_grep(input, workspace_root).await,
         "AskUserQuestion" => execute_ask_user_question(input).await,
-        "TaskCreate" => execute_task_create(input, chat_id, task_store).await,
-        "TaskUpdate" => execute_task_update(input, chat_id, task_store).await,
-        "TaskList" => execute_task_list(input, chat_id, task_store).await,
-        "TaskGet" => execute_task_get(input, chat_id, task_store).await,
+        "TodoCreate" => execute_todo_create(input, chat_id, task_store).await,
+        "TodoUpdate" => execute_todo_update(input, chat_id, task_store).await,
+        "TodoList" => execute_todo_list(input, chat_id, task_store).await,
+        "TodoGet" => execute_todo_get(input, chat_id, task_store).await,
         "list_skill" => execute_list_skill(input, skill_service).await,
         "load_skill" => execute_load_skill(input, skill_service).await,
         other => Err(AppError::ToolExecutionError(format!(
@@ -977,9 +977,9 @@ async fn execute_ask_user_question(input: &Value) -> Result<ToolOutput, AppError
     ))
 }
 
-// ─── 任务管理工具 ─────────────────────────────────────────────────────────
+// ─── 清单（todo）工具 ─────────────────────────────────────────────────────
 
-async fn execute_task_create(
+async fn execute_todo_create(
     input: &Value,
     chat_id: &str,
     task_store: &TaskStore,
@@ -999,22 +999,22 @@ async fn execute_task_create(
         description: description.map(String::from),
         status,
     };
-    let task = task_store.create(chat_id, req).await?;
+    let todo = task_store.create(chat_id, req).await?;
     Ok(ToolOutput::ok_with(
-        format!("已创建任务 #{}: {}", task.id, task.subject),
-        json!({ "task": task }),
+        format!("已创建清单项 #{}: {}", todo.id, todo.subject),
+        json!({ "todo": todo }),
     ))
 }
 
-async fn execute_task_update(
+async fn execute_todo_update(
     input: &Value,
     chat_id: &str,
     task_store: &TaskStore,
 ) -> Result<ToolOutput, AppError> {
-    let task_id = input
-        .get("taskId")
+    let todo_id = input
+        .get("todoId")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::ToolExecutionError("taskId 参数缺失".into()))?;
+        .ok_or_else(|| AppError::ToolExecutionError("todoId 参数缺失".into()))?;
     let subject = input.get("subject").and_then(Value::as_str);
     let description = if input.get("description").is_some() {
         Some(input.get("description").and_then(Value::as_str).map(String::from))
@@ -1031,21 +1031,21 @@ async fn execute_task_update(
         description,
         status,
     };
-    let task = task_store.update(chat_id, task_id, req).await?;
+    let todo = task_store.update(chat_id, todo_id, req).await?;
     Ok(ToolOutput::ok_with(
-        format!("已更新任务 #{}", task.id),
-        json!({ "task": task }),
+        format!("已更新清单项 #{}", todo.id),
+        json!({ "todo": todo }),
     ))
 }
 
-async fn execute_task_list(
+async fn execute_todo_list(
     _input: &Value,
     chat_id: &str,
     task_store: &TaskStore,
 ) -> Result<ToolOutput, AppError> {
     let tasks = task_store.list(chat_id).await;
     let summary = if tasks.is_empty() {
-        "当前会话暂无任务".to_string()
+        "当前会话暂无清单项".to_string()
     } else {
         let mut s = String::new();
         for t in &tasks {
@@ -1053,28 +1053,28 @@ async fn execute_task_list(
         }
         s
     };
-    Ok(ToolOutput::ok_with(summary, json!({ "tasks": tasks })))
+    Ok(ToolOutput::ok_with(summary, json!({ "todos": tasks })))
 }
 
-async fn execute_task_get(
+async fn execute_todo_get(
     input: &Value,
     chat_id: &str,
     task_store: &TaskStore,
 ) -> Result<ToolOutput, AppError> {
-    let task_id = input
-        .get("taskId")
+    let todo_id = input
+        .get("todoId")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::ToolExecutionError("taskId 参数缺失".into()))?;
-    let task = task_store.get(chat_id, task_id).await?;
+        .ok_or_else(|| AppError::ToolExecutionError("todoId 参数缺失".into()))?;
+    let task = task_store.get(chat_id, todo_id).await?;
     Ok(ToolOutput::ok_with(
         format!(
-            "任务 #{} [{}] {}\n{}",
+            "清单项 #{} [{}] {}\n{}",
             task.id,
             status_label(&task.status),
             task.subject,
             task.description.as_deref().unwrap_or("")
         ),
-        json!({ "task": task }),
+        json!({ "todo": task }),
     ))
 }
 
@@ -1125,7 +1125,7 @@ use crate::provider::ToolDefinition;
 /// 生成 OpenAI 兼容的 tools 数组。
 /// 返回的 `Vec<ToolDefinition>` 可直接塞入 `POST /chat/completions` 的 `tools` 字段。
 pub fn get_tools_schema() -> Vec<ToolDefinition> {
-    vec![
+    let mut tools = vec![
         // ── 文件系统工具 ──
         file_tool(
             "Read",
@@ -1283,25 +1283,25 @@ pub fn get_tools_schema() -> Vec<ToolDefinition> {
                 "additionalProperties": false
             }),
         ),
-        // ── 任务管理工具 ──
+        // ── 清单（todo）工具：todo 是普通待办记录，与 spawn_agent（子代理）无关 ──
         task_tool(
-            "TaskCreate",
-            "Create a new task in the task list.",
+            "TodoCreate",
+            "（待办清单工具，区别于 spawn_agent 子代理工具）Create a new todo entry in the todo list.",
             json!({
                 "type": "object",
                 "properties": {
                     "subject": {
                         "type": "string",
-                        "description": "Brief task title"
+                        "description": "Brief todo title"
                     },
                     "description": {
                         "type": "string",
-                        "description": "Detailed task description"
+                        "description": "Detailed todo description"
                     },
                     "status": {
                         "type": "string",
                         "enum": ["pending", "in_progress", "completed", "failed"],
-                        "description": "Initial task status"
+                        "description": "Initial todo status"
                     }
                 },
                 "required": ["subject"],
@@ -1309,36 +1309,36 @@ pub fn get_tools_schema() -> Vec<ToolDefinition> {
             }),
         ),
         task_tool(
-            "TaskUpdate",
-            "Update an existing task's status, subject, or description.",
+            "TodoUpdate",
+            "Update an existing todo entry's status, subject, or description.",
             json!({
                 "type": "object",
                 "properties": {
-                    "taskId": {
+                    "todoId": {
                         "type": "string",
-                        "description": "The task ID to update"
+                        "description": "The todo ID to update"
                     },
                     "status": {
                         "type": "string",
                         "enum": ["pending", "in_progress", "completed", "failed"],
-                        "description": "New task status"
+                        "description": "New todo status"
                     },
                     "subject": {
                         "type": "string",
-                        "description": "New task subject"
+                        "description": "New todo subject"
                     },
                     "description": {
                         "type": "string",
-                        "description": "New task description"
+                        "description": "New todo description"
                     }
                 },
-                "required": ["taskId"],
+                "required": ["todoId"],
                 "additionalProperties": false
             }),
         ),
         task_tool(
-            "TaskList",
-            "List all tasks in the current conversation.",
+            "TodoList",
+            "List all todo entries in the current conversation.",
             json!({
                 "type": "object",
                 "properties": {},
@@ -1347,17 +1347,17 @@ pub fn get_tools_schema() -> Vec<ToolDefinition> {
             }),
         ),
         task_tool(
-            "TaskGet",
-            "Get details of a single task by its ID.",
+            "TodoGet",
+            "Get details of a single todo entry by its ID.",
             json!({
                 "type": "object",
                 "properties": {
-                    "taskId": {
+                    "todoId": {
                         "type": "string",
-                        "description": "The task ID to retrieve"
+                        "description": "The todo ID to retrieve"
                     }
                 },
-                "required": ["taskId"],
+                "required": ["todoId"],
                 "additionalProperties": false
             }),
         ),
@@ -1397,7 +1397,46 @@ pub fn get_tools_schema() -> Vec<ToolDefinition> {
                 "additionalProperties": false
             }),
         ),
-    ]
+    ];
+
+    // 子代理调度类工具（设计稿 §6：spawn_agent / get_agent_output / kill_agent /
+    // run_workflow / kill_workflow），schema 由 subagent 模块生成
+    // （depth_hint 是否暴露由 allow_model_depth_hint 决定，§15.2）
+    if let Some(subagents) = crate::subagent::current_subagents() {
+        let config = subagents.config.read().unwrap().clone();
+        let registry = subagents.registry.read().unwrap();
+        for schema in crate::subagent::subagent_tool_schemas(&config, &registry) {
+            tools.push(schema_value_to_tool_def(&schema));
+        }
+    } else {
+        // 子代理系统未初始化（如单元测试）：注入默认配置的 schema，保证工具可用性声明完整
+        let default_config = crate::subagent::types::SubagentConfig::default();
+        let registry = crate::subagent::registry::AgentRegistry::new();
+        for schema in crate::subagent::subagent_tool_schemas(&default_config, &registry) {
+            tools.push(schema_value_to_tool_def(&schema));
+        }
+    }
+
+    tools
+}
+
+/// subagent 模块产出的 JSON schema → ToolDefinition（结构化构造，避免反序列化）。
+fn schema_value_to_tool_def(schema: &Value) -> ToolDefinition {
+    ToolDefinition {
+        tool_type: "function".into(),
+        function: crate::provider::FunctionDefinition {
+            name: schema["function"]["name"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            description: schema["function"]["description"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            strict: Some(true),
+            parameters: schema["function"]["parameters"].clone(),
+        },
+    }
 }
 
 fn file_tool(name: &str, description: &str, parameters: Value) -> ToolDefinition {

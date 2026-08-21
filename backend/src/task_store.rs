@@ -1,7 +1,7 @@
-//! 任务管理存储模块。
+//! 清单（todo）存储模块。
 //!
-//! 提供持久化的任务 CRUD 能力，支撑 TaskCreate / TaskUpdate / TaskList / TaskGet
-//! 四个工具调用。任务以会话维度隔离：每个 chat 拥有独立的任务列表。
+//! 提供持久化的 todo CRUD 能力，支撑 TodoCreate / TodoUpdate / TodoList / TodoGet
+//! 四个工具调用。todo 以会话维度隔离：每个 chat 拥有独立的清单。
 //!
 //! 持久化设计：
 //! - 每个 task 存储为独立的 JSON 文件：`<tasks_dir>/<chat_id>/<task_id>.json`

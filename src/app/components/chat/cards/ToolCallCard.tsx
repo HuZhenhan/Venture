@@ -4,6 +4,7 @@ import {
   Check,
   ChevronDown,
   CircleAlert,
+  Eye,
   FilePen,
   FileSearch,
   FileText,
@@ -13,9 +14,11 @@ import {
   Loader2,
   Pencil,
   RefreshCw,
+  Rocket,
   Search,
-  Eye,
+  Workflow,
   Wrench,
+  XCircle,
 } from 'lucide-react';
 import { ToolCall, ToolCallStatus } from '../../../types';
 import { APPLE_CURVE, CARD_EXPAND_TRANSITION, CARD_HEADER_TRANSITION } from '../../../constants';
@@ -31,10 +34,14 @@ const TOOL_ICON_MAP: Record<string, React.ComponentType<{ size?: number; classNa
   Edit: Pencil,
   Glob: FolderSearch,
   Grep: FileSearch,
-  TaskCreate: ListPlus,
-  TaskUpdate: RefreshCw,
-  TaskList: ListIcon,
-  TaskGet: Eye,
+  TodoCreate: ListPlus,
+  TodoUpdate: RefreshCw,
+  TodoList: ListIcon,
+  TodoGet: Eye,
+  spawn_agent: Rocket,
+  get_agent_output: Eye,
+  kill_agent: XCircle,
+  run_workflow: Workflow,
   AskUserQuestion: Eye,
 };
 
@@ -80,13 +87,15 @@ export function inputSummary(tool: ToolCall): string {
       return typeof input.pattern === 'string' ? input.pattern : '';
     case 'Grep':
       return typeof input.pattern === 'string' ? input.pattern : '';
-    case 'TaskCreate':
+    case 'TodoCreate':
       return typeof input.subject === 'string' ? input.subject : '';
-    case 'TaskUpdate':
-    case 'TaskGet':
-      return typeof input.taskId === 'string' ? `#${input.taskId}` : '';
-    case 'TaskList':
+    case 'TodoUpdate':
+    case 'TodoGet':
+      return typeof input.todoId === 'string' ? `#${input.todoId}` : '';
+    case 'TodoList':
       return '';
+    case 'spawn_agent':
+      return typeof input.description === 'string' ? input.description : '';
     case 'AskUserQuestion':
       return typeof input.question === 'string' ? input.question : '';
     default:
