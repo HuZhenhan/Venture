@@ -17,7 +17,7 @@ android {
     compileSdk = 36
     namespace = "com.venture.app"
     defaultConfig {
-        manifestPlaceholders["usesCleartextTraffic"] = "false"
+        manifestPlaceholders["usesCleartextTraffic"] = "true"
         applicationId = "com.venture.app"
         minSdk = 24
         targetSdk = 36
