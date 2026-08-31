@@ -17,7 +17,7 @@ android {
     compileSdk = 36
     namespace = "com.venture.app"
     defaultConfig {
-        manifestPlaceholders["usesCleartextTraffic"] = "true"
+        manifestPlaceholders["usesCleartextTraffic"] = "false"
         applicationId = "com.venture.app"
         minSdk = 24
         targetSdk = 36
@@ -58,6 +58,7 @@ rust {
 }
 
 dependencies {
+    implementation(project(":tauri-android"))
     implementation("androidx.webkit:webkit:1.14.0")
     implementation("androidx.appcompat:appcompat:1.7.1")
     implementation("androidx.activity:activity-ktx:1.10.1")
