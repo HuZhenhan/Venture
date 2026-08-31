@@ -163,6 +163,9 @@
       "requestedExecutionLevel": "asInvoker",
       "artifactName": "Venture-Setup-${version}.exe"
     },
+    "portable": {
+      "artifactName": "Venture-Portable-${version}.exe"
+    },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,

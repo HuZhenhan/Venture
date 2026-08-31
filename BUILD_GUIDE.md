@@ -48,17 +48,33 @@ rustc --version    # 应输出 rustc 1.xx.x
 cargo --version    # 应输出 cargo 1.xx.x
 ```
 
-> Rust 安装时会自动下载 MSVC 构建工具。如果提示缺少 Visual Studio Build Tools，请安装 [Visual Studio Build Tools 2022](https://visualstudio.microsoft.com/visual-cpp-build-tools/)，并勾选 "Desktop development with C++" 工作负载。
+### 3. 安装 MinGW-w64 工具链（GNU 目标必需）
 
-### 3. 添加 Rust 交叉编译目标
+后端使用 `x86_64-pc-windows-gnu`（GNU）目标编译，编译时需要 MinGW-w64 工具链提供 `dlltool.exe`、`gcc.exe` 等程序。
 
-项目构建脚本指定了 `x86_64-pc-windows-gnu` 目标，需要添加该 target：
+推荐安装 [MSYS2](https://www.msys2.org/)，安装后在 MSYS2 终端执行：
+
+```bash
+pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-binutils
+```
+
+然后将 MSYS2 的 `mingw64\bin` 目录（默认 `C:\msys64\mingw64\bin`）添加到系统 PATH。否则编译会报错：
+
+```
+error: error calling dlltool 'dlltool.exe': program not found
+```
+
+> 如果使用 MSVC 工具链（host 为 `x86_64-pc-windows-msvc`），则不需要 MinGW-w64，但需安装 [Visual Studio Build Tools 2022](https://visualstudio.microsoft.com/visual-cpp-build-tools/) 并勾选 "Desktop development with C++" 工作负载。
+
+### 4. 添加 Rust 编译目标
+
+开发模式脚本（`dev:backend`）指定了 `x86_64-pc-windows-gnu` 目标。如果你的默认工具链不是 GNU，需要添加该 target：
 
 ```bash
 rustup target add x86_64-pc-windows-gnu
 ```
 
-> 如果你使用默认的 MSVC 工具链，也可以直接构建。项目脚本中指定了 `--target x86_64-pc-windows-gnu`，确保该 target 已安装即可。
+> 可用 `rustc -vV` 查看默认 host。若已是 `x86_64-pc-windows-gnu` 则无需添加；生产构建（`npm run build:backend`）使用默认 host 编译。
 
 ---
 
@@ -128,9 +144,10 @@ npm run build
 
 构建产物输出到 `dist/` 目录，包含：
 
-- `dist/Venture-Setup-0.0.1.exe` — Windows 安装包
-- `dist/Venture.exe` — 可直接运行的桌面应用
+- `dist/Venture.exe` — 可直接运行的桌面应用（免安装目录版）
 - `dist/web/` — 前端静态文件
+
+> `npm run build` 只生成目录版应用；安装包与便携版请使用下面的 `build:installer` / `build:portable`。
 
 ### 分步构建
 
@@ -153,7 +170,7 @@ npm run build:desktop
 npm run build:portable
 ```
 
-生成可直接运行、无需安装的便携版本。
+生成可直接运行、无需安装的便携版本，产物：`dist/Venture-Portable-<版本号>.exe`。
 
 ### 构建安装包
 
@@ -161,7 +178,7 @@ npm run build:portable
 npm run build:installer
 ```
 
-生成 NSIS 安装包 `.exe` 文件。
+生成 NSIS 安装包，产物：`dist/Venture-Setup-<版本号>.exe`。
 
 ---
 
@@ -201,7 +218,7 @@ npm run start
 dist\Venture.exe
 
 # 或运行安装程序
-dist\Venture-Setup-0.0.1.exe
+dist\Venture-Setup-<版本号>.exe
 ```
 
 ### Web 预览模式
@@ -216,13 +233,25 @@ npm run preview:web
 
 ## 七、常见问题
 
-### Q: `npm install` 报错 "EACCES" 或权限不足？
+### Q: `npm install` 提示网络连接失败？
 
-以管理员身份运行 PowerShell，或检查目录权限。
+npm 官方源可能无法访问，改用国内镜像：
 
-### Q: 后端编译失败，提示找不到 `cc` 或链接器？
+```bash
+npm install --registry=https://registry.npmmirror.com
+```
 
-确保已安装 Visual Studio Build Tools 并勾选了 "Desktop development with C++"。
+### Q: 后端编译失败，提示 `dlltool.exe` 找不到？
+
+GNU 目标编译需要 MinGW-w64 工具链，请将 MSYS2 的 `mingw64\bin` 目录加入系统 PATH（见"环境安装"一节）。
+
+### Q: 打包时报 `Cannot create symbolic link` 错误？
+
+electron-builder 解压 winCodeSign 工具包时需要创建符号链接，非管理员且未开启开发者模式时会失败。可开启 Windows「开发者模式」（设置 → 隐私和安全性 → 开发者选项），或手动将 winCodeSign 解压到缓存目录：
+
+```
+%LOCALAPPDATA%\electron-builder\Cache\winCodeSign\winCodeSign-2.6.0\
+```
 
 ### Q: Electron 下载很慢或超时？
 
@@ -241,8 +270,9 @@ npm install
 
 所有构建产物都在 `dist/` 目录下：
 
-- 安装包：`dist/Venture-Setup-0.0.1.exe`
-- 便携版：`dist/Venture.exe`
+- 目录版应用（`npm run build` / `build:desktop`）：`dist/Venture.exe`
+- 安装包（`npm run build:installer`）：`dist/Venture-Setup-<版本号>.exe`
+- 便携版（`npm run build:portable`）：`dist/Venture-Portable-<版本号>.exe`
 - 前端文件：`dist/web/`
 
 ---
