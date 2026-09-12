@@ -3,9 +3,11 @@ import { RotateCw, ChevronLeft, ChevronRight, Globe } from 'lucide-react';
 import { DURATION } from '../constants';
 import { BrowserSummaryPanel } from './BrowserSummaryPanel';
 import { useLayoutStore, selectIsBrowserSummaryOpen, selectSetIsBrowserSummaryOpen } from '../store/useLayoutStore';
+import { DEFAULT_BROWSER_PREFERENCES, type BrowserPreferences, usePreferencesStore } from '../store/usePreferencesStore';
 
 const DEFAULT_URL = 'https://www.bing.com';
 const NATIVE_BROWSER_RESTORE_DELAY_MS = Math.ceil(DURATION.panel * 1000) + 80;
+const BOUNDS_SYNC_DEBOUNCE_MS = 80;
 
 function normalizeUrl(input: string): string {
   const t = input.trim();
@@ -46,8 +48,8 @@ const BrowserSummaryButton: React.FC<BrowserSummaryButtonProps> = ({
   <button
     type="button"
     onClick={onClick}
-    aria-label={isRunning ? '正在摘取核心信息' : '摘取网页核心信息'}
-    title={isRunning ? '正在摘取核心信息' : '摘取网页核心信息'}
+    aria-label={isRunning ? '正在摘取页面文本' : '页面文本摘取'}
+    title={isRunning ? '正在摘取页面文本' : '页面文本摘取（非 AI 总结）'}
     disabled={disabled}
     className="group relative flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-transparent text-muted-foreground transition-all duration-300 hover:border-primary/20 hover:bg-primary/10 hover:text-primary disabled:pointer-events-none disabled:text-primary"
   >
@@ -73,36 +75,59 @@ export const BrowserPanel: React.FC<BrowserPanelProps> = ({
   isOpen,
   isNativeViewHidden = false,
 }) => {
-  const [inputUrl, setInputUrl] = useState(DEFAULT_URL);
-  const [currentUrl, setCurrentUrl] = useState(DEFAULT_URL);
+  const browserPreferences = usePreferencesStore((state) => state.browser);
+  const setPreferences = usePreferencesStore((state) => state.setPreferences);
+  const initialBrowserUrl = normalizeUrl(browserPreferences.currentUrl || DEFAULT_BROWSER_PREFERENCES.currentUrl);
+  const [inputUrl, setInputUrl] = useState(initialBrowserUrl);
+  const [currentUrl, setCurrentUrl] = useState(initialBrowserUrl);
   const [isLoading, setIsLoading] = useState(false);
-  const [canGoBack, setCanGoBack] = useState(false);
-  const [canGoForward, setCanGoForward] = useState(false);
+  const [canGoBack, setCanGoBack] = useState(browserPreferences.canGoBack);
+  const [canGoForward, setCanGoForward] = useState(browserPreferences.canGoForward);
   const [nativeError, setNativeError] = useState<string | null>(null);
   const [isNativeViewReady, setIsNativeViewReady] = useState(false);
   const [isSummaryPreviewRunning, setIsSummaryPreviewRunning] = useState(false);
   const [summary, setSummary] = useState<BrowserSummary | null>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const syncAnimationFrameRef = useRef<number | null>(null);
+  const syncDebounceTimeoutRef = useRef<number | null>(null);
   const nativeRestoreTimeoutRef = useRef<number | null>(null);
-  const isElectronBrowser = __IS_ELECTRON__ && !!window.desktopShell;
+  const hasAppliedHydratedBrowserPreferencesRef = useRef(false);
+  const isElectronBrowser = typeof __IS_ELECTRON__ !== 'undefined' && __IS_ELECTRON__ && !!window.desktopShell;
   const shouldPrepareNativeBrowser = isElectronBrowser && isOpen && !isNativeViewHidden;
   const shouldShowNativeBrowser = shouldPrepareNativeBrowser && isNativeViewReady;
 
   const isBrowserSummaryOpen = useLayoutStore(selectIsBrowserSummaryOpen);
   const setIsBrowserSummaryOpen = useLayoutStore(selectSetIsBrowserSummaryOpen);
 
-  // 用 ref 跟踪摘要面板状态，避免改变 syncBounds 的依赖而触发 effect 重建。
+  // 用 ref 跟踪文本摘取面板状态，避免改变 syncBounds 的依赖而触发 effect 重建。
   const isBrowserSummaryOpenRef = useRef(isBrowserSummaryOpen);
   isBrowserSummaryOpenRef.current = isBrowserSummaryOpen;
 
+  const persistBrowserState = useCallback((state: Partial<BrowserPreferences>) => {
+    const previous = usePreferencesStore.getState().browser;
+    const next: BrowserPreferences = { ...previous, ...state };
+    if (
+      previous.currentUrl === next.currentUrl &&
+      previous.canGoBack === next.canGoBack &&
+      previous.canGoForward === next.canGoForward &&
+      previous.lastOpenedAt === next.lastOpenedAt
+    ) {
+      return;
+    }
+    setPreferences({ browser: next });
+  }, [setPreferences]);
+
   const syncBounds = useCallback(() => {
     if (!shouldShowNativeBrowser || !viewportRef.current) return;
-    if (isBrowserSummaryOpenRef.current) return; // 摘要面板打开时不恢复原生视图 bounds
+    if (isBrowserSummaryOpenRef.current) return; // 文本摘取面板打开时不恢复原生视图 bounds
     window.desktopShell?.browserSetBounds(getElementBounds(viewportRef.current));
   }, [shouldShowNativeBrowser]);
 
   const clearScheduledBoundsSync = useCallback(() => {
+    if (syncDebounceTimeoutRef.current !== null) {
+      window.clearTimeout(syncDebounceTimeoutRef.current);
+      syncDebounceTimeoutRef.current = null;
+    }
     if (syncAnimationFrameRef.current !== null) {
       window.cancelAnimationFrame(syncAnimationFrameRef.current);
       syncAnimationFrameRef.current = null;
@@ -118,10 +143,13 @@ export const BrowserPanel: React.FC<BrowserPanelProps> = ({
 
   const scheduleBoundsSync = useCallback(() => {
     clearScheduledBoundsSync();
-    syncAnimationFrameRef.current = window.requestAnimationFrame(() => {
-      syncAnimationFrameRef.current = null;
-      syncBounds();
-    });
+    syncDebounceTimeoutRef.current = window.setTimeout(() => {
+      syncDebounceTimeoutRef.current = null;
+      syncAnimationFrameRef.current = window.requestAnimationFrame(() => {
+        syncAnimationFrameRef.current = null;
+        syncBounds();
+      });
+    }, BOUNDS_SYNC_DEBOUNCE_MS);
   }, [clearScheduledBoundsSync, syncBounds]);
 
   const navigate = useCallback((url: string) => {
@@ -130,9 +158,11 @@ export const BrowserPanel: React.FC<BrowserPanelProps> = ({
     setCurrentUrl(target);
     setNativeError(null);
     setIsLoading(true);
+    persistBrowserState({ currentUrl: target });
 
     if (!isElectronBrowser) {
       setIsLoading(false);
+      setNativeError('Web 预览无法加载内置 BrowserView。请在 Electron 桌面端打开浏览器面板。');
       return;
     }
 
@@ -140,7 +170,7 @@ export const BrowserPanel: React.FC<BrowserPanelProps> = ({
       setNativeError(err instanceof Error ? err.message : String(err));
       setIsLoading(false);
     });
-  }, [isElectronBrowser]);
+  }, [isElectronBrowser, persistBrowserState]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -163,6 +193,19 @@ export const BrowserPanel: React.FC<BrowserPanelProps> = ({
     if (isElectronBrowser) window.desktopShell?.browserForward();
   }, [isElectronBrowser]);
 
+  const handleResetToDefaultPage = useCallback(() => {
+    setInputUrl(DEFAULT_URL);
+    setCurrentUrl(DEFAULT_URL);
+    setCanGoBack(false);
+    setCanGoForward(false);
+    setNativeError(null);
+    persistBrowserState({
+      currentUrl: DEFAULT_URL,
+      canGoBack: false,
+      canGoForward: false,
+    });
+  }, [persistBrowserState]);
+
   const handleSummaryPreview = useCallback(async () => {
     if (!isElectronBrowser || !shouldShowNativeBrowser || isSummaryPreviewRunning) return;
 
@@ -173,7 +216,7 @@ export const BrowserPanel: React.FC<BrowserPanelProps> = ({
       if (result) {
         setSummary(result);
         if (result.status === 'failed') {
-          setNativeError(result.error || '摘取失败');
+          setNativeError(result.error || '页面文本摘取失败');
         } else {
           setIsBrowserSummaryOpen(true);
         }
@@ -190,16 +233,38 @@ export const BrowserPanel: React.FC<BrowserPanelProps> = ({
   }, [setIsBrowserSummaryOpen]);
 
   useEffect(() => {
+    if (hasAppliedHydratedBrowserPreferencesRef.current) return;
+    const restoredUrl = normalizeUrl(browserPreferences.currentUrl || DEFAULT_URL);
+    if (restoredUrl === currentUrl && browserPreferences.canGoBack === canGoBack && browserPreferences.canGoForward === canGoForward) {
+      hasAppliedHydratedBrowserPreferencesRef.current = true;
+      return;
+    }
+    if (currentUrl !== DEFAULT_URL && currentUrl !== initialBrowserUrl) return;
+
+    setInputUrl(restoredUrl);
+    setCurrentUrl(restoredUrl);
+    setCanGoBack(browserPreferences.canGoBack);
+    setCanGoForward(browserPreferences.canGoForward);
+    hasAppliedHydratedBrowserPreferencesRef.current = true;
+  }, [browserPreferences, canGoBack, canGoForward, currentUrl, initialBrowserUrl]);
+
+  useEffect(() => {
     if (!isElectronBrowser) return;
     return window.desktopShell?.onBrowserState((state) => {
-      setInputUrl(state.url || DEFAULT_URL);
-      setCurrentUrl(state.url || DEFAULT_URL);
+      const nextUrl = state.url || DEFAULT_URL;
+      setInputUrl(nextUrl);
+      setCurrentUrl(nextUrl);
       setCanGoBack(state.canGoBack);
       setCanGoForward(state.canGoForward);
       setIsLoading(state.isLoading);
       setNativeError(state.error ?? null);
+      persistBrowserState({
+        currentUrl: nextUrl,
+        canGoBack: state.canGoBack,
+        canGoForward: state.canGoForward,
+      });
     });
-  }, [isElectronBrowser]);
+  }, [isElectronBrowser, persistBrowserState]);
 
   useEffect(() => {
     clearNativeRestoreTimer();
@@ -214,10 +279,11 @@ export const BrowserPanel: React.FC<BrowserPanelProps> = ({
     nativeRestoreTimeoutRef.current = window.setTimeout(() => {
       nativeRestoreTimeoutRef.current = null;
       setIsNativeViewReady(true);
+      persistBrowserState({ lastOpenedAt: Date.now() });
     }, NATIVE_BROWSER_RESTORE_DELAY_MS);
 
     return clearNativeRestoreTimer;
-  }, [clearNativeRestoreTimer, shouldPrepareNativeBrowser]);
+  }, [clearNativeRestoreTimer, persistBrowserState, shouldPrepareNativeBrowser]);
 
   useEffect(() => {
     if (!shouldShowNativeBrowser || !viewportRef.current) {
@@ -228,7 +294,7 @@ export const BrowserPanel: React.FC<BrowserPanelProps> = ({
     const openNativeBrowser = () => {
       const bounds = viewportRef.current ? getElementBounds(viewportRef.current) : undefined;
       if (!bounds) return;
-      if (isBrowserSummaryOpenRef.current) return; // 摘要面板打开时不要显示原生视图
+      if (isBrowserSummaryOpenRef.current) return; // 文本摘取面板打开时不要显示原生视图
       window.desktopShell?.browserOpen({ url: currentUrl, bounds }).catch((err) => {
         setNativeError(err instanceof Error ? err.message : String(err));
         setIsLoading(false);
@@ -237,31 +303,31 @@ export const BrowserPanel: React.FC<BrowserPanelProps> = ({
 
     openNativeBrowser();
     scheduleBoundsSync();
-    const resizeObserver = new ResizeObserver(syncBounds);
+    const resizeObserver = new ResizeObserver(scheduleBoundsSync);
     resizeObserver.observe(viewportRef.current);
-    window.addEventListener('resize', syncBounds);
+    window.addEventListener('resize', scheduleBoundsSync);
 
     return () => {
       clearScheduledBoundsSync();
       resizeObserver.disconnect();
-      window.removeEventListener('resize', syncBounds);
+      window.removeEventListener('resize', scheduleBoundsSync);
       window.desktopShell?.browserHide();
     };
-  }, [clearScheduledBoundsSync, currentUrl, scheduleBoundsSync, shouldShowNativeBrowser, syncBounds]);
+  }, [clearScheduledBoundsSync, currentUrl, scheduleBoundsSync, shouldShowNativeBrowser]);
 
-  // 摘要面板打开时隐藏原生浏览器视图（HTML 覆盖层才能露出来），关闭时恢复 bounds。
+  // 文本摘取面板打开时隐藏原生浏览器视图（HTML 覆盖层才能露出来），关闭时恢复 bounds。
   useEffect(() => {
     if (!shouldShowNativeBrowser) return;
     if (isBrowserSummaryOpen) {
       window.desktopShell?.browserHide();
     } else if (viewportRef.current) {
-      window.desktopShell?.browserSetBounds(getElementBounds(viewportRef.current));
+      scheduleBoundsSync();
     }
-  }, [isBrowserSummaryOpen, shouldShowNativeBrowser]);
+  }, [isBrowserSummaryOpen, scheduleBoundsSync, shouldShowNativeBrowser]);
 
   useEffect(() => {
-    syncBounds();
-  });
+    scheduleBoundsSync();
+  }, [scheduleBoundsSync]);
 
   if (!isOpen) return null;
 
@@ -333,10 +399,19 @@ export const BrowserPanel: React.FC<BrowserPanelProps> = ({
               <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
                 <Globe size={18} />
               </div>
-              <h3 className="mt-4 text-sm font-semibold text-foreground">内置浏览器需要桌面端</h3>
+              <h3 className="mt-4 text-sm font-semibold text-foreground">内置浏览器需要 Electron 桌面端</h3>
               <p className="mt-2 text-xs leading-5 text-muted-foreground">
-                BrowserView 运行在 Electron 主进程中，普通 Web 预览不会创建原生 Chromium 视图。
+                当前是 Web 环境，只能保留地址栏和状态；BrowserView 运行在 Electron 主进程中，无法在普通浏览器里创建。
               </p>
+              <div className="mt-4 flex items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleResetToDefaultPage}
+                  className="rounded-md border border-border bg-background px-3 py-1.5 text-xs text-foreground transition-colors hover:bg-muted/50"
+                >
+                  回退默认页
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -352,7 +427,7 @@ export const BrowserPanel: React.FC<BrowserPanelProps> = ({
             ) : (
               <div className="flex h-full w-full flex-col items-center justify-center gap-3 px-8 text-center">
                 <div className="rounded-2xl border border-border bg-muted/20 px-5 py-4 text-xs font-medium text-muted-foreground shadow-sm">
-                  暂无摘取内容，请点击地址栏右侧的摘取按钮获取
+                  暂无页面文本摘取内容，请点击地址栏右侧的摘取按钮获取
                 </div>
                 <button
                   type="button"

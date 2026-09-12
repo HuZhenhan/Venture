@@ -7,14 +7,28 @@ export type ChatMode = 'agent' | 'plan' | 'yolo';
 
 /**
  * 工具调用权限级别：
- * - unrestricted：无限制，所有工具直接执行；
- * - auto_review：自动审查（接口预留，暂未启用，行为同无限制）；
+ * - unrestricted：用户显式信任，本地工具直接执行，高风险外部能力仍由后端兜底；
+ * - auto_review：审计放行，保留完整权限审计记录；
  * - readonly：只读，仅允许 Read/Glob/Grep/AskUserQuestion/Task 系列；
- * - general：仅一般操作，自动放行 Read/Write/Edit/Glob/Grep/AskUserQuestion/Task 系列，
- *   其余工具需用户同意（yolo 模式下权限外工具直接自动拒绝）；
+ * - general：仅一般操作，自动放行读取/搜索/任务类工具，写入和外部能力需用户同意；
  * - ask_all：全部询问，所有工具调用都需用户同意。
  */
 export type ToolPermissionLevel = 'unrestricted' | 'auto_review' | 'readonly' | 'general' | 'ask_all';
+
+export type PermissionDecision = 'allow' | 'ask' | 'deny' | 'audit_only';
+
+export type SandboxSeam = 'no_sandbox' | 'process_isolation_reserved' | 'wasm_reserved';
+
+export interface PermissionProfile {
+  readFiles: PermissionDecision;
+  writeFiles: PermissionDecision;
+  executeCommands: PermissionDecision;
+  networkAccess: PermissionDecision;
+  mcpAccess: PermissionDecision;
+  skillAccess: PermissionDecision;
+  subagentAccess: PermissionDecision;
+  sandbox: SandboxSeam;
+}
 
 /** 各模式下可选择的权限级别。 */
 export type ToolPermissionsByMode = Partial<Record<ChatMode, ToolPermissionLevel>>;
@@ -97,6 +111,10 @@ export interface ToolCall {
   structured?: unknown;
   /** 操作描述（权限询问卡片展示用，预留字段，暂未启用）。 */
   description?: string;
+  /** 后端 registry 返回的风险等级，用于工具卡片和权限文案。 */
+  riskLevel?: 'low' | 'medium' | 'high';
+  /** 后端 registry 返回的权限提示文案。 */
+  permissionPrompt?: string;
   /** 用户已在权限询问中同意本次调用（一次性放行标记，"一律同意"另行写入会话白名单）。 */
   approvalGranted?: boolean;
 }
@@ -272,6 +290,11 @@ export interface TokenUsage {
   prompt_tokens_details?: {
     cached_tokens?: number;
   };
+  completion_tokens_details?: {
+    reasoning_tokens?: number;
+    accepted_prediction_tokens?: number;
+    rejected_prediction_tokens?: number;
+  };
 }
 
 export interface Chat {
@@ -289,12 +312,24 @@ export interface AIModel {
   id: string;
   name: string;
   enabled: boolean;
+  capabilities?: ModelCapabilities;
+  /** 旧配置兼容字段；新逻辑统一读取 capabilities.supportsMultimodal。 */
   supportsMultimodal?: boolean;
+}
+
+export type ProviderKind = 'openai_compatible' | 'deepseek';
+
+export interface ModelCapabilities {
+  supportsReasoning: boolean;
+  supportsTools: boolean;
+  supportsMultimodal: boolean;
+  contextWindow?: number;
 }
 
 export interface APIConfig {
   id: string;
   name: string;
+  providerKind: ProviderKind;
   baseUrl: string;
   hasApiKey: boolean;
   apiKeyPreview: string;

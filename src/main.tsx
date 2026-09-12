@@ -28,10 +28,6 @@ function initializeTheme() {
 
 initializeTheme();
 
-useThemeStore.setState(() => {
-  return {};
-});
-
 createRoot(document.getElementById("root")!).render(
   <ErrorBoundary
     fallback={

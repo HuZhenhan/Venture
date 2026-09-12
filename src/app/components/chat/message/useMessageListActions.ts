@@ -6,8 +6,8 @@ import { useGeneration } from '../../../hooks/useGeneration';
 import { copyTextToClipboard } from '../../../utils/clipboard';
 import { adaptLegacyMessageContent, getVisibleText } from '../../../utils/messageContentProtocol';
 import { INSERT_CHAT_EVENT } from '../../../utils/codeReferences';
-import { restoreTurn } from '../../../services/toolService';
-import { toolSignature, USER_REJECTED_OUTPUT } from '../../../utils/toolPermissions';
+import { auditPermissionDecision, restoreTurn } from '../../../services/toolService';
+import { getPermissionProfileForLevel, resolvePermissionForChat, toolSignature, USER_REJECTED_OUTPUT } from '../../../utils/toolPermissions';
 
 export function useMessageListActions(chat: { id: string; messages: Message[] } | null, activeChatId: string | null) {
   const setActiveChatId = useChatStore((state) => state.setActiveChatId);
@@ -178,9 +178,51 @@ export function useMessageListActions(chat: { id: string; messages: Message[] } 
     resumeToolExecution(activeChatId, messageId);
   }, [activeChatId, resumeToolExecution, updateChatMessages]);
 
+  const handleSessionApproveToolCall = useCallback((messageId: string, toolId: string) => {
+    if (!activeChatId) return;
+    const currentChat = useChatStore.getState().chats.find((c) => c.id === activeChatId);
+    const message = currentChat?.messages.find((m) => m.id === messageId);
+    const tool = message?.toolCalls?.find((tc) => tc.id === toolId);
+    if (tool) {
+      useChatStore.getState().addSessionApprovedToolSignature(activeChatId, toolSignature(tool.name, tool.input));
+    }
+    updateChatMessages(activeChatId, (messages) =>
+      messages.map((msg) => {
+        if (msg.id !== messageId) return msg;
+        return {
+          ...msg,
+          toolCalls: (msg.toolCalls ?? []).map((tc) =>
+            tc.id === toolId && tc.status === 'needs_approval'
+              ? { ...tc, status: 'pending' as const, approvalGranted: true }
+              : tc
+          ),
+        };
+      }),
+    );
+    resumeToolExecution(activeChatId, messageId);
+  }, [activeChatId, resumeToolExecution, updateChatMessages]);
+
   // 拒绝：标记为 failed 并回填拒绝说明给模型，然后恢复执行流程。
   const handleRejectToolCall = useCallback((messageId: string, toolId: string) => {
     if (!activeChatId) return;
+    const currentChat = useChatStore.getState().chats.find((item) => item.id === activeChatId);
+    const currentMessage = currentChat?.messages.find((message) => message.id === messageId);
+    const rejectedTool = currentMessage?.toolCalls?.find((toolCall) => toolCall.id === toolId);
+    if (currentChat && rejectedTool) {
+      const permissionLevel = resolvePermissionForChat(currentChat, currentChat.mode);
+      auditPermissionDecision({
+        tool: rejectedTool.name,
+        input: rejectedTool.input,
+        chatId: activeChatId,
+        turnMessageId: messageId,
+        toolCallId: toolId,
+        permissionProfile: getPermissionProfileForLevel(permissionLevel),
+        approvalScope: 'once',
+        userChoice: 'rejected',
+      }).catch((error) => {
+        console.warn('Failed to audit rejected tool permission.', error);
+      });
+    }
     updateChatMessages(activeChatId, (messages) =>
       messages.map((message) => {
         if (message.id !== messageId) return message;
@@ -317,6 +359,7 @@ export function useMessageListActions(chat: { id: string; messages: Message[] } 
     handleUpdateAskBlock,
     handleSkipAskBlock,
     handleApproveToolCall,
+    handleSessionApproveToolCall,
     handleAlwaysApproveToolCall,
     handleRejectToolCall,
     handleMarkdownComplete,

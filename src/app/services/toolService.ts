@@ -1,6 +1,53 @@
+import { PermissionProfile } from '../types';
 import { backendDelete, backendGet, backendPatch, backendPost } from './backendClient';
+import { CodeDiff } from '../types';
 
 // ─── 工具执行 ──────────────────────────────────────────────────────────────
+
+export type ToolRiskLevel = 'low' | 'medium' | 'high';
+
+export type FileHistoryEffect = 'none' | 'read_tracker' | 'write_backup_on_success' | 'edit_backup_on_success';
+
+export interface ToolPermissionPolicy {
+  readonlyAllowed: boolean;
+  generalAllowed: boolean;
+  requiresApproval: boolean;
+  permissionPrompt: string;
+}
+
+export interface ToolAuditInfo {
+  mutatesFiles: boolean;
+  fileHistoryEffect: FileHistoryEffect;
+}
+
+export interface ToolMetadata {
+  name: string;
+  description: string;
+  parameters: unknown;
+  riskLevel: ToolRiskLevel;
+  permission: ToolPermissionPolicy;
+  audit: ToolAuditInfo;
+}
+
+interface ToolsSchemaResponse {
+  tools: ToolMetadata[];
+}
+
+let toolMetadataPromise: Promise<Record<string, ToolMetadata>> | null = null;
+
+export async function getToolMetadataMap(): Promise<Record<string, ToolMetadata>> {
+  if (!toolMetadataPromise) {
+    toolMetadataPromise = backendGet<ToolsSchemaResponse>('/api/tools/schema')
+      .then((result) => Object.fromEntries(result.tools.map((tool) => [tool.name.toLowerCase(), tool])))
+      .catch(() => ({}));
+  }
+  return toolMetadataPromise;
+}
+
+export async function getToolMetadata(toolName: string): Promise<ToolMetadata | undefined> {
+  const map = await getToolMetadataMap();
+  return map[toolName.toLowerCase()];
+}
 
 export interface ExecuteToolResult {
   /** 工具输出文本，将作为 [tool] 的 [output] 回填给模型。 */
@@ -23,6 +70,62 @@ export interface ExecuteToolParams {
   turnMessageId?: string;
   /** 当前会话模型 ID（子代理 spawn_agent 工具的 inherit 语义；设计稿 §18.1 #6）。 */
   modelId?: string;
+  permissionProfile: PermissionProfile;
+  approvalGranted: boolean;
+  toolCallId?: string;
+  approvalScope?: 'once' | 'session' | 'permanent';
+  userChoice?: 'none' | 'approved' | 'always_approved' | 'rejected' | 'timed_out';
+}
+
+export interface AuditPermissionDecisionParams {
+  tool: string;
+  input: unknown;
+  chatId?: string;
+  turnMessageId?: string;
+  toolCallId?: string;
+  permissionProfile: PermissionProfile;
+  approvalScope?: 'once' | 'session' | 'permanent';
+  userChoice: 'none' | 'approved' | 'always_approved' | 'rejected' | 'timed_out';
+}
+
+// ─── 外部能力入口 ──────────────────────────────────────────────────────────
+
+export type ExternalCapabilityId = 'git' | 'sfh' | 'office' | 'vision' | 'browser';
+export type ExternalCapabilityStatus = 'available' | 'unavailable' | 'reserved';
+
+export interface ExternalCapability {
+  id: ExternalCapabilityId;
+  status: ExternalCapabilityStatus;
+  label: string;
+  description: string;
+}
+
+export interface GitChangedFile {
+  path: string;
+  originalPath?: string;
+  indexStatus: string;
+  worktreeStatus: string;
+  displayStatus: string;
+}
+
+export interface GitStatusSnapshot {
+  isRepo: boolean;
+  root?: string;
+  branch?: string;
+  ahead?: number;
+  behind?: number;
+  files: GitChangedFile[];
+  message?: string;
+}
+
+export interface ExternalCapabilitiesResponse {
+  workspaceRoot?: string;
+  capabilities: ExternalCapability[];
+  git: GitStatusSnapshot;
+}
+
+export async function getExternalCapabilities(): Promise<ExternalCapabilitiesResponse> {
+  return backendGet<ExternalCapabilitiesResponse>('/api/external-capabilities');
 }
 
 /**
@@ -38,8 +141,13 @@ export async function executeTool(params: ExecuteToolParams): Promise<ExecuteToo
       tool: params.tool,
       input: params.input ?? {},
       chatId: params.chatId,
+      permissionProfile: params.permissionProfile,
+      approvalGranted: params.approvalGranted,
       ...(params.turnMessageId ? { turnMessageId: params.turnMessageId } : {}),
       ...(params.modelId ? { modelId: params.modelId } : {}),
+      ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
+      ...(params.approvalScope ? { approvalScope: params.approvalScope } : {}),
+      ...(params.userChoice ? { userChoice: params.userChoice } : {}),
     },
   );
   return {
@@ -47,6 +155,19 @@ export async function executeTool(params: ExecuteToolParams): Promise<ExecuteToo
     isError: result.isError,
     structured: result.structured,
   };
+}
+
+export async function auditPermissionDecision(params: AuditPermissionDecisionParams): Promise<void> {
+  await backendPost('/api/permissions/audit', {
+    tool: params.tool,
+    input: params.input ?? {},
+    ...(params.chatId ? { chatId: params.chatId } : {}),
+    ...(params.turnMessageId ? { turnMessageId: params.turnMessageId } : {}),
+    ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
+    permissionProfile: params.permissionProfile,
+    ...(params.approvalScope ? { approvalScope: params.approvalScope } : {}),
+    userChoice: params.userChoice,
+  });
 }
 
 // ─── 清单（todo）CRUD ───────────────────────────────────────────────────────
@@ -149,8 +270,22 @@ export interface ChangeRecordSummary {
   turnId: string;
   messageId: string;
   path: string;
+  pathBefore?: string;
+  pathAfter?: string;
   kind: 'create' | 'modify' | 'delete' | 'rename';
   source: 'agent' | 'external_edit' | 'user_manual';
+  timestamp: number;
+}
+
+interface RawChangeRecordSummary {
+  id: string;
+  turnId: string;
+  messageId: string;
+  path?: string;
+  pathBefore?: string;
+  pathAfter?: string;
+  kind: ChangeRecordSummary['kind'];
+  source: ChangeRecordSummary['source'];
   timestamp: number;
 }
 
@@ -233,10 +368,22 @@ export async function getChanges(params: {
   if (params.chatId) query.set('chatId', params.chatId);
   if (params.turnId) query.set('turnId', params.turnId);
   if (params.path) query.set('path', params.path);
-  const result = await backendGet<{ changes: ChangeRecordSummary[] }>(
+  const result = await backendGet<{ changes: RawChangeRecordSummary[] }>(
     `/api/files/changes?${query.toString()}`,
   );
-  return result.changes;
+  return result.changes.map((record) => ({
+    ...record,
+    path: record.path ?? record.pathAfter ?? record.pathBefore ?? '<unknown>',
+  }));
+}
+
+/**
+ * 查询单条变更记录的只读 diff。
+ * 路由：GET /api/files/diff?recordId=...
+ */
+export async function getChangeDiff(recordId: string): Promise<CodeDiff> {
+  const query = new URLSearchParams({ recordId });
+  return backendGet<CodeDiff>(`/api/files/diff?${query.toString()}`);
 }
 
 /**

@@ -8,6 +8,33 @@ import {
   subscribeSubagentEvents,
 } from '../services/subagentService';
 
+export type WorkflowNodeStatus = 'pending' | 'queued' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled';
+
+export interface RuntimeWorkflowNode {
+  id: string;
+  agentId?: string;
+  seq?: number;
+  title: string;
+  subtitle?: string;
+  status: WorkflowNodeStatus;
+  reason?: string;
+}
+
+export interface RuntimeWorkflowEdge {
+  id: string;
+  source: string;
+  target: string;
+  status?: 'ok' | 'failed';
+  reason?: string;
+}
+
+export interface RuntimeWorkflowRun {
+  runId: string;
+  nodes: RuntimeWorkflowNode[];
+  edges: RuntimeWorkflowEdge[];
+  updatedAt: number;
+}
+
 /**
  * 子代理系统全局状态（设计稿 §7.5 / §11.2 适配）。
  *
@@ -21,6 +48,8 @@ interface SubagentState {
   connected: boolean;
   pendingPermissions: SubagentPermissionRequest[];
   pendingCompletions: SubagentCompletionSummary[];
+  workflowRuns: Record<string, RuntimeWorkflowRun>;
+  activeWorkflowRunId: string | null;
   /** 最近一次子代理状态（供 UI 调试展示） */
   lastEvent: SubagentSseEvent | null;
 
@@ -43,6 +72,8 @@ export const useSubagentStore = create<SubagentState>((set, get) => ({
   connected: false,
   pendingPermissions: [],
   pendingCompletions: [],
+  workflowRuns: {},
+  activeWorkflowRunId: null,
   lastEvent: null,
 
   init: () => {
@@ -63,7 +94,7 @@ export const useSubagentStore = create<SubagentState>((set, get) => ({
     set({ lastEvent: event });
     switch (event.type) {
       case 'subagent_permission_request': {
-        const { requestId, tool, input } = event.data;
+        const { requestId, tool, input, reason, riskLevel, impact } = event.data;
         if (!requestId || !tool) return;
         const req: SubagentPermissionRequest = {
           requestId: String(requestId),
@@ -71,6 +102,11 @@ export const useSubagentStore = create<SubagentState>((set, get) => ({
           taskId: event.taskId,
           tool: String(tool),
           input,
+          reason: typeof reason === 'string' ? reason : undefined,
+          riskLevel: riskLevel === 'low' || riskLevel === 'medium' || riskLevel === 'high' ? riskLevel : undefined,
+          impact: impact && typeof impact === 'object' && 'value' in impact
+            ? impact as { kind: string; value: string }
+            : undefined,
           requestedAt: Date.now(),
         };
         set((state) => ({
@@ -114,6 +150,15 @@ export const useSubagentStore = create<SubagentState>((set, get) => ({
         set((state) => ({
           pendingCompletions: [...state.pendingCompletions, summary],
         }));
+        break;
+      }
+      case 'subagent_state':
+      case 'subagent_recovery': {
+        mergeWorkflowAgentEvent(event, set);
+        break;
+      }
+      case 'workflow_dag': {
+        mergeWorkflowDagEvent(event, set);
         break;
       }
       default:
@@ -173,4 +218,119 @@ function buildSummary(event: SubagentSseEvent): string {
     return `失败（${event.data.kind ?? 'unknown'}）：${event.data.error ?? ''}`;
   }
   return event.data.state ?? '';
+}
+
+function mergeWorkflowDagEvent(
+  event: SubagentSseEvent,
+  set: (partial: Partial<SubagentState> | ((state: SubagentState) => Partial<SubagentState>)) => void,
+) {
+  const runId = getRunId(event);
+  if (!runId) return;
+  const incomingNodes = Array.isArray(event.data.nodes) ? event.data.nodes : [];
+  const incomingEdges = Array.isArray(event.data.edges) ? event.data.edges : [];
+
+  set((state) => {
+    const existing = state.workflowRuns[runId] ?? { runId, nodes: [], edges: [], updatedAt: 0 };
+    const nodes = new Map(existing.nodes.map((node) => [node.id, node]));
+    incomingNodes.forEach((raw) => {
+      const node = parseWorkflowNode(raw);
+      if (!node) return;
+      nodes.set(node.id, { ...nodes.get(node.id), ...node });
+    });
+    const edges = new Map(existing.edges.map((edge) => [edge.id, edge]));
+    incomingEdges.forEach((raw) => {
+      const edge = parseWorkflowEdge(raw);
+      if (!edge) return;
+      edges.set(edge.id, { ...edges.get(edge.id), ...edge });
+    });
+    return {
+      activeWorkflowRunId: runId,
+      workflowRuns: {
+        ...state.workflowRuns,
+        [runId]: {
+          runId,
+          nodes: [...nodes.values()].sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0)),
+          edges: [...edges.values()],
+          updatedAt: Date.now(),
+        },
+      },
+    };
+  });
+}
+
+function mergeWorkflowAgentEvent(
+  event: SubagentSseEvent,
+  set: (partial: Partial<SubagentState> | ((state: SubagentState) => Partial<SubagentState>)) => void,
+) {
+  const runId = getRunId(event);
+  if (!runId || event.data.owner !== 'workflow') return;
+  const status = parseWorkflowStatus(event.data.state);
+  if (!status) return;
+  set((state) => {
+    const existing = state.workflowRuns[runId];
+    if (!existing) return {};
+    const nodes = existing.nodes.map((node) => {
+      if (node.agentId !== event.taskId) return node;
+      return { ...node, status, reason: String(event.data.reason ?? event.data.error ?? node.reason ?? '') || undefined };
+    });
+    return {
+      workflowRuns: {
+        ...state.workflowRuns,
+        [runId]: { ...existing, nodes, updatedAt: Date.now() },
+      },
+    };
+  });
+}
+
+function parseWorkflowNode(raw: unknown): RuntimeWorkflowNode | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const data = raw as Record<string, unknown>;
+  const id = typeof data.id === 'string' ? data.id : null;
+  const status = parseWorkflowStatus(data.status);
+  if (!id || !status) return null;
+  return {
+    id,
+    agentId: typeof data.agentId === 'string' ? data.agentId : undefined,
+    seq: typeof data.seq === 'number' ? data.seq : undefined,
+    title: typeof data.title === 'string' ? data.title.slice(0, 80) : id,
+    subtitle: typeof data.subtitle === 'string' ? data.subtitle : undefined,
+    status,
+    reason: typeof data.reason === 'string' ? data.reason : undefined,
+  };
+}
+
+function parseWorkflowEdge(raw: unknown): RuntimeWorkflowEdge | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const data = raw as Record<string, unknown>;
+  const id = typeof data.id === 'string' ? data.id : null;
+  const source = typeof data.source === 'string' ? data.source : null;
+  const target = typeof data.target === 'string' ? data.target : null;
+  if (!id || !source || !target) return null;
+  return {
+    id,
+    source,
+    target,
+    status: data.status === 'failed' ? 'failed' : 'ok',
+    reason: typeof data.reason === 'string' ? data.reason : undefined,
+  };
+}
+
+function parseWorkflowStatus(value: unknown): WorkflowNodeStatus | null {
+  if (
+    value === 'pending' ||
+    value === 'queued' ||
+    value === 'running' ||
+    value === 'completed' ||
+    value === 'failed' ||
+    value === 'skipped' ||
+    value === 'cancelled'
+  ) {
+    return value;
+  }
+  return null;
+}
+
+function getRunId(event: SubagentSseEvent): string | null {
+  const runId = event.data.runId;
+  return typeof runId === 'string' && runId.length > 0 ? runId : null;
 }

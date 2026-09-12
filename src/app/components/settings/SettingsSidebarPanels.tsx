@@ -1,7 +1,7 @@
 import { AnimatePresence, motion } from 'motion/react';
-import { Check, ChevronDown, Edit2, Image, Loader2, Minus, Plus, Save, Shield, Trash2, X, Zap } from 'lucide-react';
+import { Check, ChevronDown, Edit2, Image, Loader2, Minus, Plus, RefreshCw, Save, Server, Shield, Trash2, X, Zap } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { APIConfig, AIModel } from '../../types';
+import { APIConfig, AIModel, ProviderKind } from '../../types';
 import type { LegacyLocalDataSummary } from '../../services/appDataService';
 import { useClickOutside } from '../../hooks/useClickOutside';
 import { APPLE_CURVE, DURATION } from '../../constants';
@@ -9,19 +9,9 @@ import { addProvider, deleteProvider, updateProvider } from '../../services/mode
 import { useChatStore } from '../../store/useChatStore';
 import { SkillPermission, SkillSettings } from '../../services/skillService';
 import { selectSkillSettings, selectSkillSettingsLoading, useSkillStore } from '../../store/useSkillStore';
-
-interface CustomSelectProps {
-  value: string;
-  options: string[];
-  onChange: (value: string) => void;
-  menuPosition?: 'top' | 'bottom';
-}
-
-interface AppleToggleProps {
-  checked: boolean;
-  onChange: () => void;
-  size?: 'sm' | 'md';
-}
+import { listMcpServers, McpServerConfig, McpServerView, replaceMcpServers } from '../../services/mcpService';
+import { PROVIDER_KIND_LABELS, PROVIDER_KIND_OPTIONS, resolveModelCapabilities, withResolvedModelCapabilities } from '../../utils/modelCapabilities';
+import { Toggle, Select } from '../common';
 
 interface PreferencesPanelProps {
   sendShortcut: boolean;
@@ -30,11 +20,14 @@ interface PreferencesPanelProps {
   debugMode: boolean;
   appearance: string;
   hasPendingChanges: boolean;
+  approvedToolSignatures: string[];
   onSendShortcutChange: (value: boolean) => void;
   onAutoGenerateConversationTitlesChange: (value: boolean) => void;
   onAutoGenerateReasoningTitlesChange: (value: boolean) => void;
   onDebugModeChange: (value: boolean) => void;
   onAppearanceChange: (appearance: string) => void;
+  onRevokeApprovedToolSignature: (signature: string) => void;
+  onClearApprovedToolSignatures: () => void;
   onSave: () => void;
 }
 
@@ -52,10 +45,26 @@ interface ProviderLibraryPanelProps {
 
 interface ProviderFormData {
   name: string;
+  providerKind: ProviderKind;
   baseUrl: string;
   apiKey: string;
   models: AIModel[];
   inputContextWindow: number;
+}
+
+function createEmptyModel(): AIModel {
+  return {
+    id: '',
+    name: '',
+    enabled: true,
+    supportsMultimodal: false,
+    capabilities: {
+      supportsReasoning: false,
+      supportsTools: true,
+      supportsMultimodal: false,
+      contextWindow: undefined,
+    },
+  };
 }
 
 interface ProviderConfigModalProps {
@@ -64,81 +73,8 @@ interface ProviderConfigModalProps {
   onClose: () => void;
 }
 
-export function CustomSelect({
-  value,
-  options,
-  onChange,
-  menuPosition = 'bottom',
-}: CustomSelectProps) {
-  const [isOpen, setIsOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useClickOutside(containerRef, () => setIsOpen(false), isOpen);
-
-  return (
-    <div className="relative" ref={containerRef}>
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] font-bold text-muted-foreground transition-colors hover:bg-muted/50"
-      >
-        <span>{value}</span>
-        <ChevronDown size={12} className={`transition-transform duration-300 ${isOpen ? 'rotate-180' : ''}`} />
-      </button>
-
-      <AnimatePresence>
-        {isOpen && (
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: menuPosition === 'top' ? 4 : -4 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: menuPosition === 'top' ? 4 : -4 }}
-            transition={{ duration: DURATION.card, ease: APPLE_CURVE }}
-            className={`absolute right-0 z-[9999] w-32 overflow-hidden rounded-xl border border-border bg-background/95 p-1 shadow-lg backdrop-blur-2xl ${
-              menuPosition === 'top' ? 'bottom-full mb-1' : 'top-full mt-1'
-            }`}
-          >
-            {options.map((option) => (
-              <button
-                key={option}
-                onClick={() => {
-                  onChange(option);
-                  setIsOpen(false);
-                }}
-                className="flex w-full items-center justify-between rounded-lg px-2.5 py-1.5 text-left text-[12px] text-foreground transition-colors hover:bg-muted/50"
-              >
-                <span>{option}</span>
-                {value === option ? <Check size={12} className="text-foreground" /> : null}
-              </button>
-            ))}
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-export function AppleToggle({ checked, onChange, size = 'md' }: AppleToggleProps) {
-  const isSmall = size === 'sm';
-
-  return (
-    <button
-      onClick={(event) => {
-        event.stopPropagation();
-        onChange();
-      }}
-      className={`
-        relative flex cursor-pointer items-center rounded-full transition-colors duration-500 ease-[0.32,0.72,0,1]
-        ${checked ? 'bg-primary' : 'bg-switch-background/40'}
-        ${isSmall ? 'h-[18px] w-8' : 'h-[24px] w-[42px]'}
-      `}
-    >
-      <motion.div
-        animate={{ x: checked ? (isSmall ? 16 : 20) : 2 }}
-        transition={{ type: 'spring', stiffness: 500, damping: 30, mass: 0.8 }}
-        className={`${isSmall ? 'h-3.5 w-3.5' : 'h-5 w-5'} rounded-full bg-background shadow-sm`}
-      />
-    </button>
-  );
-}
+// CustomSelect 和 AppleToggle 已迁移到 common 组件库
+// 使用：import { Toggle, Select } from '../common'
 
 export function PreferencesPanel({
   sendShortcut,
@@ -147,11 +83,14 @@ export function PreferencesPanel({
   debugMode,
   appearance,
   hasPendingChanges,
+  approvedToolSignatures,
   onSendShortcutChange,
   onAutoGenerateConversationTitlesChange,
   onAutoGenerateReasoningTitlesChange,
   onDebugModeChange,
   onAppearanceChange,
+  onRevokeApprovedToolSignature,
+  onClearApprovedToolSignatures,
   onSave,
 }: PreferencesPanelProps) {
   return (
@@ -163,14 +102,14 @@ export function PreferencesPanel({
               <p className="text-[13px] font-semibold text-foreground">发送快捷键</p>
               <p className="text-[11px] text-muted-foreground">使用 Enter 或 Cmd+Enter 发送</p>
             </div>
-            <AppleToggle checked={sendShortcut} onChange={() => onSendShortcutChange(!sendShortcut)} />
+            <Toggle checked={sendShortcut} onChange={() => onSendShortcutChange(!sendShortcut)} />
           </div>
           <div className="flex items-center justify-between px-4 py-3.5">
             <div className="space-y-0.5 pr-4">
               <p className="text-[13px] font-semibold text-foreground">对话标题生成</p>
               <p className="text-[11px] text-muted-foreground">首轮回复完成后自动生成会话标题</p>
             </div>
-            <AppleToggle
+            <Toggle
               checked={autoGenerateConversationTitles}
               onChange={() => onAutoGenerateConversationTitlesChange(!autoGenerateConversationTitles)}
             />
@@ -180,7 +119,7 @@ export function PreferencesPanel({
               <p className="text-[13px] font-semibold text-foreground">思考标题生成</p>
               <p className="text-[11px] text-muted-foreground">思考内容完成后自动生成卡片标题</p>
             </div>
-            <AppleToggle
+            <Toggle
               checked={autoGenerateReasoningTitles}
               onChange={() => onAutoGenerateReasoningTitlesChange(!autoGenerateReasoningTitles)}
             />
@@ -190,7 +129,7 @@ export function PreferencesPanel({
               <p className="text-[13px] font-semibold text-foreground">外观模式</p>
               <p className="text-[11px] text-muted-foreground">设置深色或浅色主题</p>
             </div>
-            <CustomSelect
+            <Select
               value={appearance}
               options={['跟随系统', '浅色模式', '深色模式']}
               onChange={onAppearanceChange}
@@ -202,11 +141,49 @@ export function PreferencesPanel({
               <p className="text-[13px] font-semibold text-foreground">调试模式</p>
               <p className="text-[11px] text-muted-foreground">开启后在对话列表右键菜单显示「追踪」选项</p>
             </div>
-            <AppleToggle
+            <Toggle
               checked={debugMode}
               onChange={() => onDebugModeChange(!debugMode)}
             />
           </div>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-border bg-background/50 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div className="space-y-1">
+            <p className="text-[13px] font-semibold text-foreground">永久工具授权</p>
+            <p className="text-[11px] leading-5 text-muted-foreground">
+              管理当前会话中“一律同意”的工具调用签名。撤销后，相同工具和参数会重新请求确认。
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClearApprovedToolSignatures}
+            disabled={approvedToolSignatures.length === 0}
+            className="shrink-0 rounded-lg px-2 py-1 text-[11px] font-bold text-destructive transition-colors hover:bg-destructive/10 disabled:cursor-not-allowed disabled:text-muted-foreground"
+          >
+            全部撤销
+          </button>
+        </div>
+        <div className="mt-3 space-y-2">
+          {approvedToolSignatures.length > 0 ? approvedToolSignatures.map((signature) => (
+            <div key={signature} className="flex items-center justify-between gap-2 rounded-xl border border-border bg-background/60 px-3 py-2">
+              <code className="min-w-0 truncate text-[10px] text-muted-foreground">{signature}</code>
+              <button
+                type="button"
+                onClick={() => onRevokeApprovedToolSignature(signature)}
+                className="shrink-0 rounded-lg p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                title="撤销永久授权"
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
+          )) : (
+            <p className="rounded-xl border border-dashed border-border px-3 py-3 text-[11px] text-muted-foreground">
+              当前会话没有永久工具授权。
+            </p>
+          )}
         </div>
       </div>
 
@@ -260,6 +237,172 @@ export function MigrationPanel({
           迁移当前入口数据
         </button>
       </div>
+    </div>
+  );
+}
+
+function normalizeMcpServers(value: unknown): McpServerConfig[] {
+  if (!Array.isArray(value)) {
+    throw new Error('MCP 配置必须是数组');
+  }
+  return value.map((item, index) => {
+    if (!item || typeof item !== 'object') {
+      throw new Error(`MCP 配置第 ${index + 1} 项必须是对象`);
+    }
+    const raw = item as Partial<McpServerConfig>;
+    if (!raw.id || !raw.name || !raw.transport) {
+      throw new Error(`MCP 配置第 ${index + 1} 项缺少 id/name/transport`);
+    }
+    if (!['stdio', 'http', 'sse'].includes(raw.transport)) {
+      throw new Error(`MCP 配置第 ${index + 1} 项 transport 非法`);
+    }
+    return {
+      id: String(raw.id).trim(),
+      name: String(raw.name).trim(),
+      transport: raw.transport,
+      command: raw.command ? String(raw.command) : null,
+      url: raw.url ? String(raw.url) : null,
+      env: raw.env && typeof raw.env === 'object' ? raw.env : {},
+      enabled: Boolean(raw.enabled),
+      permissionScope: raw.permissionScope === 'deny' ? 'deny' : 'ask',
+    };
+  });
+}
+
+function defaultMcpConfigText() {
+  return JSON.stringify([
+    {
+      id: 'local-example',
+      name: 'Local Example',
+      transport: 'stdio',
+      command: 'npx -y @modelcontextprotocol/server-filesystem .',
+      url: null,
+      env: {},
+      enabled: false,
+      permissionScope: 'ask',
+    },
+  ], null, 2);
+}
+
+export function McpSettingsPanel() {
+  const [servers, setServers] = useState<McpServerView[]>([]);
+  const [configText, setConfigText] = useState('[]');
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+
+  const loadServers = async () => {
+    setLoading(true);
+    setStatus(null);
+    try {
+      const next = await listMcpServers();
+      setServers(next);
+      setConfigText(JSON.stringify(next.map((server) => server.config), null, 2));
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '读取 MCP 配置失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadServers();
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    setStatus(null);
+    try {
+      const parsed = JSON.parse(configText) as unknown;
+      const normalized = normalizeMcpServers(parsed);
+      const next = await replaceMcpServers(normalized);
+      setServers(next);
+      setConfigText(JSON.stringify(next.map((server) => server.config), null, 2));
+      setStatus('MCP 配置已保存');
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : '保存 MCP 配置失败');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="w-full shrink-0 space-y-5 px-4 py-5 animate-in fade-in slide-in-from-bottom-2 duration-500 custom-scrollbar overflow-y-auto">
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-[11px] font-bold uppercase tracking-[0.25em] text-muted-foreground">MCP Runtime</h3>
+          <button
+            onClick={loadServers}
+            disabled={loading}
+            className="flex items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 py-1 text-[11px] font-bold text-foreground transition-all hover:bg-muted/50 disabled:cursor-not-allowed disabled:text-muted-foreground"
+          >
+            <RefreshCw size={12} className={loading ? 'animate-spin' : ''} />
+            刷新
+          </button>
+        </div>
+
+        <div className="rounded-2xl border border-border bg-background/50 p-4">
+          <p className="text-[13px] font-semibold text-foreground">连接状态</p>
+          <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
+            当前阶段只做配置登记、状态展示与工具 schema 边界映射；HTTP/SSE 和真实调用尚未启用。
+          </p>
+          <div className="mt-4 space-y-2">
+            {servers.map((server) => (
+              <div key={server.config.id} className="rounded-2xl border border-border bg-background/60 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <Server size={15} className="text-muted-foreground" />
+                    <div className="min-w-0">
+                      <p className="truncate text-[13px] font-bold text-foreground">{server.config.name}</p>
+                      <p className="font-mono text-[10px] text-muted-foreground">{server.config.id}</p>
+                    </div>
+                  </div>
+                  <span className="rounded-full bg-muted px-2 py-1 text-[10px] font-bold uppercase text-muted-foreground">
+                    {server.liveness.status}
+                  </span>
+                </div>
+                <p className="mt-2 text-[11px] leading-5 text-muted-foreground">{server.liveness.message}</p>
+                <p className="mt-1 text-[10px] text-muted-foreground">工具：{server.tools.length}，默认需要用户授权</p>
+              </div>
+            ))}
+            {servers.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-border p-5 text-center text-[12px] text-muted-foreground">
+                未配置 MCP server
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="rounded-2xl border border-border bg-background/50 p-4">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-[13px] font-semibold text-foreground">基础配置 JSON</p>
+              <p className="mt-1 text-[11px] leading-5 text-muted-foreground">字段：id/name/transport/command/url/env/enabled/permissionScope。</p>
+            </div>
+            <button
+              onClick={() => setConfigText(defaultMcpConfigText())}
+              className="rounded-lg px-2 py-1 text-[11px] font-bold text-primary hover:bg-primary/10"
+            >
+              示例
+            </button>
+          </div>
+          <textarea
+            value={configText}
+            onChange={(event) => setConfigText(event.target.value)}
+            spellCheck={false}
+            className="mt-3 min-h-[240px] w-full resize-y rounded-2xl border border-border bg-input-background px-4 py-3 font-mono text-[11px] leading-5 outline-none focus:ring-4 focus:ring-primary/5"
+          />
+          {status ? <p className="mt-2 text-[11px] leading-5 text-muted-foreground">{status}</p> : null}
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="mt-3 flex w-full items-center justify-center gap-2.5 rounded-2xl border border-border bg-background py-3 text-[12px] font-bold text-foreground transition-all hover:bg-muted/50 disabled:cursor-not-allowed disabled:bg-muted/60 disabled:text-muted-foreground"
+          >
+            {saving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}
+            保存 MCP 配置
+          </button>
+        </div>
+      </section>
     </div>
   );
 }
@@ -333,6 +476,7 @@ export function ProviderLibraryPanel({
           <div className="space-y-4">
             {apiConfigs.map((config) => {
               const isExpanded = expandedConfigId === config.id;
+              const providerKind = config.providerKind ?? 'openai_compatible';
 
               return (
                 <div
@@ -348,6 +492,10 @@ export function ProviderLibraryPanel({
                         <div className="min-w-0 flex-col">
                           <span className="truncate text-[14px] font-bold tracking-tight text-foreground">{config.name}</span>
                           <div className="mt-0.5 flex items-center gap-2">
+                            <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-bold text-muted-foreground">
+                              {PROVIDER_KIND_LABELS[providerKind]}
+                            </span>
+                            <span className="text-[10px] font-light text-muted-foreground">|</span>
                             <div className="flex items-center gap-1">
                               <Zap size={10} className="fill-green-500 text-green-500" />
                               <span className="font-mono text-[10px] font-bold text-muted-foreground">
@@ -392,27 +540,35 @@ export function ProviderLibraryPanel({
                         {config.models.length === 0 && (
                           <p className="px-3 py-2 text-[12px] text-muted-foreground">暂无模型，请编辑供应商添加模型</p>
                         )}
-                        {config.models.map((model) => (
-                          <div key={model.id} className="group/model flex items-center justify-between rounded-xl px-3 py-2 transition-colors hover:bg-muted/50">
-                            <div className="min-w-0 flex-1">
-                              <span className={`block truncate text-[12px] ${model.enabled ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}>
-                                {model.name}
-                              </span>
-                              <span className="font-mono text-[10px] text-muted-foreground">{model.id}</span>
-                              {model.supportsMultimodal ? (
-                                <span className="mt-1 inline-flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold text-primary">
-                                  <Image size={10} />
-                                  Vision
+                        {config.models.map((model) => {
+                          const capabilities = resolveModelCapabilities(model, config);
+                          return (
+                            <div key={model.id} className="group/model flex items-center justify-between rounded-xl px-3 py-2 transition-colors hover:bg-muted/50">
+                              <div className="min-w-0 flex-1">
+                                <span className={`block truncate text-[12px] ${model.enabled ? 'font-semibold text-foreground' : 'text-muted-foreground'}`}>
+                                  {model.name}
                                 </span>
-                              ) : null}
+                                <span className="font-mono text-[10px] text-muted-foreground">{model.id}</span>
+                                <div className="mt-1 flex flex-wrap gap-1">
+                                  {capabilities.supportsReasoning ? <span className="rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold text-primary">Reasoning</span> : null}
+                                  {capabilities.supportsTools ? <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-bold text-muted-foreground">Tools</span> : null}
+                                  {capabilities.supportsMultimodal ? (
+                                    <span className="inline-flex items-center gap-1 rounded-md bg-primary/10 px-1.5 py-0.5 text-[10px] font-bold text-primary">
+                                      <Image size={10} />
+                                      Vision
+                                    </span>
+                                  ) : null}
+                                  {capabilities.contextWindow ? <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-bold text-muted-foreground">{capabilities.contextWindow}K</span> : null}
+                                </div>
+                              </div>
+                              <Toggle
+                                size="sm"
+                                checked={model.enabled}
+                                onChange={() => handleToggleModel(config.id, model.id)}
+                              />
                             </div>
-                            <AppleToggle
-                              size="sm"
-                              checked={model.enabled}
-                              onChange={() => handleToggleModel(config.id, model.id)}
-                            />
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     </div>
                   </div>
@@ -493,9 +649,10 @@ export function ProviderConfigModal({
 
   const emptyForm: ProviderFormData = {
     name: '',
+    providerKind: 'openai_compatible',
     baseUrl: '',
     apiKey: '',
-    models: [{ id: '', name: '', enabled: true, supportsMultimodal: false }],
+    models: [createEmptyModel()],
     inputContextWindow: 128,
   };
 
@@ -505,11 +662,12 @@ export function ProviderConfigModal({
     if (config) {
       setFormData({
         name: config.name,
+        providerKind: config.providerKind ?? 'openai_compatible',
         baseUrl: config.baseUrl,
         apiKey: '',
         models: config.models.length > 0
-          ? config.models.map((model) => ({ ...model, supportsMultimodal: model.supportsMultimodal ?? false }))
-          : [{ id: '', name: '', enabled: true, supportsMultimodal: false }],
+          ? config.models.map((model) => withResolvedModelCapabilities(model, config))
+          : [createEmptyModel()],
         inputContextWindow: config.inputContextWindow,
       });
     } else {
@@ -523,7 +681,7 @@ export function ProviderConfigModal({
   const addModelRow = () => {
     setFormData((prev) => ({
       ...prev,
-      models: [...prev.models, { id: '', name: '', enabled: true, supportsMultimodal: false }],
+      models: [...prev.models, createEmptyModel()],
     }));
   };
 
@@ -540,6 +698,37 @@ export function ProviderConfigModal({
       models: prev.models.map((m, i) => (i === idx ? { ...m, [field]: value } : m)),
     }));
   };
+
+  const updateModelCapability = (
+    idx: number,
+    field: 'supportsReasoning' | 'supportsTools' | 'supportsMultimodal' | 'contextWindow',
+    value: boolean | number | undefined,
+  ) => {
+    setFormData((prev) => ({
+      ...prev,
+      models: prev.models.map((model, i) => {
+        if (i !== idx) return model;
+        const capabilities = resolveModelCapabilities(model);
+        const nextCapabilities = { ...capabilities, [field]: value };
+        return {
+          ...model,
+          supportsMultimodal: nextCapabilities.supportsMultimodal,
+          capabilities: nextCapabilities,
+        };
+      }),
+    }));
+  };
+
+  const buildProviderModels = (models: AIModel[]) => models.map((model) => {
+    const capabilities = resolveModelCapabilities(model);
+    return {
+      id: model.id.trim(),
+      name: model.name.trim() || model.id.trim(),
+      enabled: model.enabled,
+      supportsMultimodal: capabilities.supportsMultimodal,
+      capabilities,
+    };
+  });
 
   const handleSave = async () => {
     if (!formData.name.trim() || !formData.baseUrl.trim()) {
@@ -559,27 +748,19 @@ export function ProviderConfigModal({
       if (editingConfig) {
         await updateProvider(editingConfig.id, {
           name: formData.name.trim(),
+          providerKind: formData.providerKind,
           baseUrl: formData.baseUrl.trim(),
           apiKey: formData.apiKey.trim() || undefined,
-          models: validModels.map((m) => ({
-            id: m.id.trim(),
-            name: m.name.trim() || m.id.trim(),
-            enabled: m.enabled,
-            supportsMultimodal: m.supportsMultimodal ?? false,
-          })),
+          models: buildProviderModels(validModels),
           inputContextWindow: formData.inputContextWindow,
         });
       } else {
         await addProvider({
           name: formData.name.trim(),
+          providerKind: formData.providerKind,
           baseUrl: formData.baseUrl.trim(),
           apiKey: formData.apiKey.trim(),
-          models: validModels.map((m) => ({
-            id: m.id.trim(),
-            name: m.name.trim() || m.id.trim(),
-            enabled: m.enabled,
-            supportsMultimodal: m.supportsMultimodal ?? false,
-          })),
+          models: buildProviderModels(validModels),
           inputContextWindow: formData.inputContextWindow,
         });
       }
@@ -616,7 +797,7 @@ export function ProviderConfigModal({
                 <h3 className="text-2xl font-bold tracking-tight text-foreground">
                   {editingConfig ? '编辑供应商' : '添加供应商'}
                 </h3>
-                <p className="text-[13px] font-medium text-muted-foreground">配置 OpenAI-compatible API 接入</p>
+                <p className="text-[13px] font-medium text-muted-foreground">配置可扩展 Provider Adapter 接入</p>
               </div>
               <button onClick={onClose} className="rounded-full p-3 text-muted-foreground transition-all hover:bg-muted/50 hover:text-foreground">
                 <X size={24} />
@@ -633,6 +814,20 @@ export function ProviderConfigModal({
                   placeholder="例如: DeepSeek, OpenAI, 本地 Ollama"
                   className="w-full rounded-[24px] border-none bg-input-background px-6 py-4 text-[15px] font-medium outline-none transition-all placeholder:text-muted-foreground focus:ring-4 focus:ring-primary/5"
                 />
+              </div>
+
+              <div className="space-y-3">
+                <label className="ml-1 text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Provider 类型</label>
+                <select
+                  value={formData.providerKind}
+                  onChange={(event) => setFormData((prev) => ({ ...prev, providerKind: event.target.value as ProviderKind }))}
+                  className="w-full rounded-[24px] border-none bg-input-background px-6 py-4 text-[15px] font-medium outline-none transition-all focus:ring-4 focus:ring-primary/5"
+                >
+                  {PROVIDER_KIND_OPTIONS.map((kind) => (
+                    <option key={kind} value={kind}>{PROVIDER_KIND_LABELS[kind]}</option>
+                  ))}
+                </select>
+                <p className="ml-1 text-[11px] text-muted-foreground">旧配置默认使用 OpenAI-compatible；DeepSeek 使用独立流式解析 adapter。</p>
               </div>
 
               <div className="space-y-3">
@@ -673,46 +868,63 @@ export function ProviderConfigModal({
                   </button>
                 </div>
                 <div className="space-y-2">
-                  {formData.models.map((model, idx) => (
-                    <div key={idx} className="rounded-2xl bg-input-background px-4 py-3 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">模型 {idx + 1}</span>
-                        <button
-                          type="button"
-                          onClick={() => removeModelRow(idx)}
-                          className="rounded-lg p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
-                          disabled={formData.models.length === 1}
-                        >
-                          <Minus size={12} />
-                        </button>
-                      </div>
-                      <input
-                        type="text"
-                        value={model.id}
-                        onChange={(e) => updateModelRow(idx, 'id', e.target.value)}
-                        placeholder="模型 ID（必填），例如 deepseek-chat"
-                        className="w-full rounded-xl border-none bg-background/50 px-3 py-2 text-[13px] font-medium outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/10"
-                      />
-                      <input
-                        type="text"
-                        value={model.name}
-                        onChange={(e) => updateModelRow(idx, 'name', e.target.value)}
-                        placeholder="显示名（可选，留空则使用 ID）"
-                        className="w-full rounded-xl border-none bg-background/50 px-3 py-2 text-[13px] font-medium outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/10"
-                      />
-                      <div className="flex items-center justify-between rounded-xl bg-background/40 px-3 py-2">
-                        <div className="flex items-center gap-2 text-[12px] font-medium text-foreground">
-                          <Image size={13} className="text-muted-foreground" />
-                          <span>支持多模态图片</span>
+                  {formData.models.map((model, idx) => {
+                    const capabilities = resolveModelCapabilities(model);
+                    return (
+                      <div key={idx} className="rounded-2xl bg-input-background px-4 py-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">模型 {idx + 1}</span>
+                          <button
+                            type="button"
+                            onClick={() => removeModelRow(idx)}
+                            className="rounded-lg p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive transition-colors"
+                            disabled={formData.models.length === 1}
+                          >
+                            <Minus size={12} />
+                          </button>
                         </div>
-                        <AppleToggle
-                          size="sm"
-                          checked={model.supportsMultimodal ?? false}
-                          onChange={() => updateModelRow(idx, 'supportsMultimodal', !(model.supportsMultimodal ?? false))}
+                        <input
+                          type="text"
+                          value={model.id}
+                          onChange={(e) => updateModelRow(idx, 'id', e.target.value)}
+                          placeholder="模型 ID（必填），例如 deepseek-chat"
+                          className="w-full rounded-xl border-none bg-background/50 px-3 py-2 text-[13px] font-medium outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/10"
                         />
+                        <input
+                          type="text"
+                          value={model.name}
+                          onChange={(e) => updateModelRow(idx, 'name', e.target.value)}
+                          placeholder="显示名（可选，留空则使用 ID）"
+                          className="w-full rounded-xl border-none bg-background/50 px-3 py-2 text-[13px] font-medium outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/10"
+                        />
+                        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                          <div className="flex items-center justify-between rounded-xl bg-background/40 px-3 py-2">
+                            <span className="text-[12px] font-medium text-foreground">Reasoning</span>
+                            <Toggle size="sm" checked={capabilities.supportsReasoning} onChange={() => updateModelCapability(idx, 'supportsReasoning', !capabilities.supportsReasoning)} />
+                          </div>
+                          <div className="flex items-center justify-between rounded-xl bg-background/40 px-3 py-2">
+                            <span className="text-[12px] font-medium text-foreground">Tools</span>
+                            <Toggle size="sm" checked={capabilities.supportsTools} onChange={() => updateModelCapability(idx, 'supportsTools', !capabilities.supportsTools)} />
+                          </div>
+                          <div className="flex items-center justify-between rounded-xl bg-background/40 px-3 py-2">
+                            <div className="flex items-center gap-2 text-[12px] font-medium text-foreground">
+                              <Image size={13} className="text-muted-foreground" />
+                              <span>Vision</span>
+                            </div>
+                            <Toggle size="sm" checked={capabilities.supportsMultimodal} onChange={() => updateModelCapability(idx, 'supportsMultimodal', !capabilities.supportsMultimodal)} />
+                          </div>
+                          <input
+                            type="number"
+                            min={1}
+                            value={capabilities.contextWindow ?? ''}
+                            onChange={(event) => updateModelCapability(idx, 'contextWindow', event.target.value ? Number(event.target.value) : undefined)}
+                            placeholder="Context K tokens"
+                            className="rounded-xl border-none bg-background/50 px-3 py-2 text-[12px] font-medium outline-none placeholder:text-muted-foreground focus:ring-2 focus:ring-primary/10"
+                          />
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </div>
 
@@ -921,7 +1133,7 @@ export function SkillSettingsPanel() {
           onChange={(extra) => update((current) => ({ ...current, roots: { ...current.roots, extra } }))}
         />
         <SkillSettingsRow label="禁用默认用户目录" hint="不再扫描默认的用户级技能目录">
-          <AppleToggle
+          <Toggle
             checked={draft.roots.disableDefaultUser}
             onChange={() => update((current) => ({ ...current, roots: { ...current.roots, disableDefaultUser: !current.roots.disableDefaultUser } }))}
           />
@@ -943,7 +1155,7 @@ export function SkillSettingsPanel() {
       <SkillSettingsSection title="兼容模式">
         {(['claude', 'agents', 'opencode', 'grok'] as const).map((key) => (
           <SkillSettingsRow key={key} label={key.charAt(0).toUpperCase() + key.slice(1)}>
-            <AppleToggle
+            <Toggle
               checked={draft.compat[key]}
               onChange={() => update((current) => ({ ...current, compat: { ...current.compat, [key]: !current.compat[key] } }))}
             />
@@ -958,7 +1170,7 @@ export function SkillSettingsPanel() {
 
       <SkillSettingsSection title="权限">
         <SkillSettingsRow label="默认模式" hint="未匹配规则时的默认权限">
-          <CustomSelect
+          <Select
             value={draft.permission.defaultMode}
             options={['allow', 'deny', 'ask']}
             onChange={(value) => update((current) => ({ ...current, permission: { ...current.permission, defaultMode: value } }))}
@@ -970,7 +1182,7 @@ export function SkillSettingsPanel() {
             {ruleEntries.map(([pattern, mode]) => (
               <div key={pattern} className="flex items-center gap-2 rounded-lg bg-muted/40 px-2 py-1">
                 <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-foreground">{pattern}</span>
-                <CustomSelect
+                <Select
                   value={mode}
                   options={['allow', 'deny', 'ask']}
                   onChange={(value) => update((current) => ({
@@ -1000,7 +1212,7 @@ export function SkillSettingsPanel() {
               placeholder="技能名或匹配模式"
               className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2 py-1 font-mono text-[11px] text-foreground outline-none placeholder:text-muted-foreground focus:border-foreground/30"
             />
-            <CustomSelect value={newRuleMode} options={['allow', 'deny', 'ask']} onChange={(value) => setNewRuleMode(value as SkillPermission)} />
+            <Select value={newRuleMode} options={['allow', 'deny', 'ask']} onChange={(value) => setNewRuleMode(value as SkillPermission)} />
             <button
               type="button"
               disabled={!newRulePattern.trim()}
@@ -1022,7 +1234,7 @@ export function SkillSettingsPanel() {
 
       <SkillSettingsSection title="预算">
         <SkillSettingsRow label="启用公告" hint="在系统提示中公告可用技能">
-          <AppleToggle
+          <Toggle
             checked={draft.budget.announcementEnabled}
             onChange={() => update((current) => ({ ...current, budget: { ...current.budget, announcementEnabled: !current.budget.announcementEnabled } }))}
           />
@@ -1046,7 +1258,7 @@ export function SkillSettingsPanel() {
 
       <SkillSettingsSection title="日志">
         <SkillSettingsRow label="日志级别">
-          <CustomSelect
+          <Select
             value={draft.logging.level}
             options={['error', 'warn', 'info', 'debug', 'trace']}
             onChange={(value) => update((current) => ({ ...current, logging: { level: value } }))}

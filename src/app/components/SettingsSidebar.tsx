@@ -8,7 +8,7 @@ import { useThemeStore, ThemeMode } from '../store/useThemeStore';
 import { getLegacyLocalDataSummary, migrateLegacyLocalData } from '../services/appDataService';
 import { useChatStore } from '../store/useChatStore';
 import { beginHorizontalResize } from '../utils/panelResize';
-import { PreferencesPanel, ProviderLibraryPanel, MigrationPanel, SkillSettingsPanel } from './settings/SettingsSidebarPanels';
+import { PreferencesPanel, ProviderLibraryPanel, MigrationPanel, SkillSettingsPanel, McpSettingsPanel } from './settings/SettingsSidebarPanels';
 
 interface SettingsSidebarProps {
   isOpen: boolean;
@@ -26,7 +26,7 @@ const THEME_OPTIONS: { label: string; value: ThemeMode }[] = [
   { label: '深色模式', value: 'dark' },
 ];
 
-const SETTINGS_TABS_ORDER: SettingsTab[] = ['basic', 'api', 'migration', 'skills'];
+const SETTINGS_TABS_ORDER: SettingsTab[] = ['basic', 'api', 'migration', 'skills', 'mcp'];
 
 export const SettingsSidebar: React.FC<SettingsSidebarProps> = ({ 
   isOpen, 
@@ -42,6 +42,13 @@ export const SettingsSidebar: React.FC<SettingsSidebarProps> = ({
   const hydrateTheme = useThemeStore((state) => state.hydrateTheme);
   const hydrateAppData = useChatStore((state) => state.hydrateAppData);
   const loadApiConfigs = useChatStore((state) => state.loadApiConfigs);
+  const activeChatId = useChatStore((state) => state.activeChatId);
+  const approvedToolSignatures = useMemo(() => {
+    const chat = useChatStore.getState().chats.find((c) => c.id === activeChatId);
+    return chat?.approvedToolCalls ?? [];
+  }, [activeChatId]);
+  const removeApprovedToolSignature = useChatStore((state) => state.removeApprovedToolSignature);
+  const clearApprovedToolSignatures = useChatStore((state) => state.clearApprovedToolSignatures);
   const {
     sendShortcut: savedSendShortcut,
     autoGenerateConversationTitles: savedAutoGenerateConversationTitles,
@@ -77,16 +84,20 @@ export const SettingsSidebar: React.FC<SettingsSidebarProps> = ({
     draftDebugMode !== savedDebugMode ||
     draftTheme !== theme;
 
-  useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
+  const prevIsOpenRef = useRef(isOpen);
 
-    setDraftSendShortcut(savedSendShortcut);
-    setDraftAutoGenerateConversationTitles(savedAutoGenerateConversationTitles);
-    setDraftAutoGenerateReasoningTitles(savedAutoGenerateReasoningTitles);
-    setDraftDebugMode(savedDebugMode);
-    setDraftTheme(theme);
+  useEffect(() => {
+    const wasOpen = prevIsOpenRef.current;
+    prevIsOpenRef.current = isOpen;
+
+    // 只在打开时同步一次状态
+    if (!wasOpen && isOpen) {
+      setDraftSendShortcut(savedSendShortcut);
+      setDraftAutoGenerateConversationTitles(savedAutoGenerateConversationTitles);
+      setDraftAutoGenerateReasoningTitles(savedAutoGenerateReasoningTitles);
+      setDraftDebugMode(savedDebugMode);
+      setDraftTheme(theme);
+    }
   }, [isOpen, savedSendShortcut, savedAutoGenerateConversationTitles, savedAutoGenerateReasoningTitles, savedDebugMode, theme]);
 
   const handleSavePreferences = () => {
@@ -149,6 +160,13 @@ export const SettingsSidebar: React.FC<SettingsSidebarProps> = ({
             onAutoGenerateReasoningTitlesChange={setDraftAutoGenerateReasoningTitles}
             debugMode={draftDebugMode}
             onDebugModeChange={setDraftDebugMode}
+            approvedToolSignatures={approvedToolSignatures}
+            onRevokeApprovedToolSignature={(signature) => {
+              if (activeChatId) removeApprovedToolSignature(activeChatId, signature);
+            }}
+            onClearApprovedToolSignatures={() => {
+              if (activeChatId) clearApprovedToolSignatures(activeChatId);
+            }}
             onSave={handleSavePreferences}
             hasPendingChanges={hasPendingPreferenceChanges}
           />
@@ -171,6 +189,8 @@ export const SettingsSidebar: React.FC<SettingsSidebarProps> = ({
         );
       case 'skills':
         return <SkillSettingsPanel />;
+      case 'mcp':
+        return <McpSettingsPanel />;
       default:
         return null;
     }

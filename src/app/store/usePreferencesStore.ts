@@ -10,6 +10,21 @@ const DEFAULT_SEND_SHORTCUT = true;
 const DEFAULT_AUTO_GENERATE_CONVERSATION_TITLES = true;
 const DEFAULT_AUTO_GENERATE_REASONING_TITLES = true;
 const DEFAULT_DEBUG_MODE = false;
+const DEFAULT_BROWSER_URL = 'https://www.bing.com';
+
+export interface BrowserPreferences {
+  currentUrl: string;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  lastOpenedAt: number | null;
+}
+
+export const DEFAULT_BROWSER_PREFERENCES: BrowserPreferences = {
+  currentUrl: DEFAULT_BROWSER_URL,
+  canGoBack: false,
+  canGoForward: false,
+  lastOpenedAt: null,
+};
 
 export interface AppPreferences {
   language: AppLanguage;
@@ -17,6 +32,7 @@ export interface AppPreferences {
   autoGenerateConversationTitles: boolean;
   autoGenerateReasoningTitles: boolean;
   debugMode: boolean;
+  browser: BrowserPreferences;
 }
 
 interface PreferencesState {
@@ -25,6 +41,7 @@ interface PreferencesState {
   autoGenerateConversationTitles: boolean;
   autoGenerateReasoningTitles: boolean;
   debugMode: boolean;
+  browser: BrowserPreferences;
   setPreferences: (preferences: Partial<AppPreferences>) => void;
   hydratePreferences: (preferences: AppPreferences) => void;
 }
@@ -33,27 +50,41 @@ function isAppLanguage(value: unknown): value is AppLanguage {
   return typeof value === 'string' && AVAILABLE_LANGUAGES.includes(value as AppLanguage);
 }
 
+function normalizeBrowserPreferences(value: unknown): BrowserPreferences {
+  if (!value || typeof value !== 'object') return DEFAULT_BROWSER_PREFERENCES;
+  const record = value as Partial<Record<keyof BrowserPreferences, unknown>>;
+  return {
+    currentUrl: typeof record.currentUrl === 'string' && record.currentUrl.trim()
+      ? record.currentUrl
+      : DEFAULT_BROWSER_PREFERENCES.currentUrl,
+    canGoBack: typeof record.canGoBack === 'boolean' ? record.canGoBack : DEFAULT_BROWSER_PREFERENCES.canGoBack,
+    canGoForward: typeof record.canGoForward === 'boolean' ? record.canGoForward : DEFAULT_BROWSER_PREFERENCES.canGoForward,
+    lastOpenedAt: typeof record.lastOpenedAt === 'number' && Number.isFinite(record.lastOpenedAt)
+      ? record.lastOpenedAt
+      : DEFAULT_BROWSER_PREFERENCES.lastOpenedAt,
+  };
+}
+
+function defaultPreferences(): AppPreferences {
+  return {
+    language: DEFAULT_LANGUAGE,
+    sendShortcut: DEFAULT_SEND_SHORTCUT,
+    autoGenerateConversationTitles: DEFAULT_AUTO_GENERATE_CONVERSATION_TITLES,
+    autoGenerateReasoningTitles: DEFAULT_AUTO_GENERATE_REASONING_TITLES,
+    debugMode: DEFAULT_DEBUG_MODE,
+    browser: DEFAULT_BROWSER_PREFERENCES,
+  };
+}
+
 function readStoredPreferences() {
   if (typeof window === 'undefined') {
-    return {
-      language: DEFAULT_LANGUAGE,
-      sendShortcut: DEFAULT_SEND_SHORTCUT,
-      autoGenerateConversationTitles: DEFAULT_AUTO_GENERATE_CONVERSATION_TITLES,
-      autoGenerateReasoningTitles: DEFAULT_AUTO_GENERATE_REASONING_TITLES,
-      debugMode: DEFAULT_DEBUG_MODE,
-    };
+    return defaultPreferences();
   }
 
   try {
     const rawValue = window.localStorage.getItem(PREFERENCES_STORAGE_KEY);
     if (!rawValue) {
-      return {
-        language: DEFAULT_LANGUAGE,
-        sendShortcut: DEFAULT_SEND_SHORTCUT,
-        autoGenerateConversationTitles: DEFAULT_AUTO_GENERATE_CONVERSATION_TITLES,
-        autoGenerateReasoningTitles: DEFAULT_AUTO_GENERATE_REASONING_TITLES,
-        debugMode: DEFAULT_DEBUG_MODE,
-      };
+      return defaultPreferences();
     }
 
     const parsedValue = JSON.parse(rawValue) as {
@@ -63,6 +94,7 @@ function readStoredPreferences() {
       autoGenerateConversationTitles?: unknown;
       autoGenerateReasoningTitles?: unknown;
       debugMode?: unknown;
+      browser?: unknown;
     };
     const legacyAutoGenerateTitles =
       typeof parsedValue.autoGenerateTitles === 'boolean' ? parsedValue.autoGenerateTitles : undefined;
@@ -76,16 +108,11 @@ function readStoredPreferences() {
         ? parsedValue.autoGenerateReasoningTitles
         : legacyAutoGenerateTitles ?? DEFAULT_AUTO_GENERATE_REASONING_TITLES,
       debugMode: typeof parsedValue.debugMode === 'boolean' ? parsedValue.debugMode : DEFAULT_DEBUG_MODE,
+      browser: normalizeBrowserPreferences(parsedValue.browser),
     };
   } catch (error) {
     console.warn('Failed to read app preferences from storage.', error);
-    return {
-      language: DEFAULT_LANGUAGE,
-      sendShortcut: DEFAULT_SEND_SHORTCUT,
-      autoGenerateConversationTitles: DEFAULT_AUTO_GENERATE_CONVERSATION_TITLES,
-      autoGenerateReasoningTitles: DEFAULT_AUTO_GENERATE_REASONING_TITLES,
-      debugMode: DEFAULT_DEBUG_MODE,
-    };
+    return defaultPreferences();
   }
 }
 
@@ -113,6 +140,7 @@ export const usePreferencesStore = create<PreferencesState>((set) => ({
   ...initialPreferences,
   hydratePreferences: (preferences) => set((state) => ({
     ...preferences,
+    browser: normalizeBrowserPreferences(preferences.browser),
     // debugMode 是纯客户端运行时开关，不从后端 hydrate。
     // 原因：后端旧数据文件不含 debug_mode 字段，反序列化时 #[serde(default)] 会填 false，
     // 若直接覆盖会把用户已开启的 debugMode 重置为 false。
@@ -128,8 +156,9 @@ export const usePreferencesStore = create<PreferencesState>((set) => ({
         autoGenerateConversationTitles: next.autoGenerateConversationTitles,
         autoGenerateReasoningTitles: next.autoGenerateReasoningTitles,
         debugMode: next.debugMode,
+        browser: next.browser,
       });
-      return preferences;
+      return next;
     });
   },
 }));

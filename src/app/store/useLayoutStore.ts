@@ -12,6 +12,9 @@ import {
   MIN_SETTINGS_WIDTH,
   RIGHT_RAIL_WIDTH,
   CHAT_EDITOR_GUTTER,
+  DEFAULT_CHANGE_REVIEW_WIDTH,
+  MIN_CHANGE_REVIEW_WIDTH,
+  MAX_CHANGE_REVIEW_WIDTH,
 } from '../constants';
 import {
   resolveActiveWorkspaceView,
@@ -70,11 +73,13 @@ export interface ResponsiveLayout {
   browserParticipatesInLayout: boolean;
   workflowParticipatesInLayout: boolean;
   skillsParticipatesInLayout: boolean;
+  capabilitiesParticipatesInLayout: boolean;
   settingsParticipatesInLayout: boolean;
   usageParticipatesInLayout: boolean;
   singlePageContentWidth: number;
   workflowWidth: number;
   skillPanelWidth: number;
+  capabilitiesPanelWidth: number;
 }
 
 function areResponsiveLayoutsEqual(a: ResponsiveLayout, b: ResponsiveLayout) {
@@ -93,11 +98,13 @@ function areResponsiveLayoutsEqual(a: ResponsiveLayout, b: ResponsiveLayout) {
     a.browserParticipatesInLayout === b.browserParticipatesInLayout &&
     a.workflowParticipatesInLayout === b.workflowParticipatesInLayout &&
     a.skillsParticipatesInLayout === b.skillsParticipatesInLayout &&
+    a.capabilitiesParticipatesInLayout === b.capabilitiesParticipatesInLayout &&
     a.settingsParticipatesInLayout === b.settingsParticipatesInLayout &&
     a.usageParticipatesInLayout === b.usageParticipatesInLayout &&
     a.singlePageContentWidth === b.singlePageContentWidth &&
     a.workflowWidth === b.workflowWidth &&
-    a.skillPanelWidth === b.skillPanelWidth
+    a.skillPanelWidth === b.skillPanelWidth &&
+    a.capabilitiesPanelWidth === b.capabilitiesPanelWidth
   );
 }
 
@@ -141,6 +148,7 @@ function deriveResponsiveLayout(state: LayoutComputationState): ResponsiveLayout
   const browserParticipatesInLayout = !singlePageMode && state.isBrowserOpen && state.activeWorkspaceView === 'browser';
   const workflowParticipatesInLayout = !singlePageMode && state.activeWorkspaceView === 'workflow';
   const skillsParticipatesInLayout = !singlePageMode && state.activeWorkspaceView === 'skills';
+  const capabilitiesParticipatesInLayout = !singlePageMode && state.activeWorkspaceView === 'capabilities';
   const settingsParticipatesInLayout = !singlePageMode && state.isSettingsOpen && state.activeWorkspaceView === 'settings';
   const usageParticipatesInLayout = !singlePageMode && state.isUsageOpen && state.activeWorkspaceView === 'usage';
   const availableBesideSidebar = Math.max(
@@ -156,6 +164,9 @@ function deriveResponsiveLayout(state: LayoutComputationState): ResponsiveLayout
   const skillPanelWidth = skillsParticipatesInLayout
     ? panelWidthForAvailable(BROWSER_PANEL_WIDTH, MIN_BROWSER_WIDTH, availableBesideSidebar - 320)
     : 0;
+  const capabilitiesPanelWidth = capabilitiesParticipatesInLayout
+    ? panelWidthForAvailable(BROWSER_PANEL_WIDTH, MIN_BROWSER_WIDTH, availableBesideSidebar - 320)
+    : 0;
   const settingsPanelWidth = settingsParticipatesInLayout || usageParticipatesInLayout
     ? panelWidthForAvailable(
         state.settingsWidth,
@@ -163,7 +174,7 @@ function deriveResponsiveLayout(state: LayoutComputationState): ResponsiveLayout
         availableBesideSidebar - 320
       )
     : 0;
-  const activeExtraPanelWidth = browserWidth + workflowWidth + skillPanelWidth
+  const activeExtraPanelWidth = browserWidth + workflowWidth + skillPanelWidth + capabilitiesPanelWidth
     + (settingsParticipatesInLayout ? settingsPanelWidth : 0)
     + (usageParticipatesInLayout ? settingsPanelWidth : 0);
   const availableForCore = usableViewportWidth - activeExtraPanelWidth;
@@ -221,11 +232,13 @@ function deriveResponsiveLayout(state: LayoutComputationState): ResponsiveLayout
     browserParticipatesInLayout,
     workflowParticipatesInLayout,
     skillsParticipatesInLayout,
+    capabilitiesParticipatesInLayout,
     settingsParticipatesInLayout,
     usageParticipatesInLayout,
     singlePageContentWidth: Math.max(usableViewportWidth, 0),
     workflowWidth,
     skillPanelWidth,
+    capabilitiesPanelWidth,
   };
 }
 
@@ -264,6 +277,13 @@ export const selectToggleBrowser = (state: LayoutState) => state.toggleBrowser;
 export const selectToggleBrowserSummary = (state: LayoutState) => state.toggleBrowserSummary;
 export const selectToggleWorkflow = (state: LayoutState) => state.toggleWorkflow;
 export const selectToggleSkills = (state: LayoutState) => state.toggleSkills;
+export const selectToggleCapabilities = (state: LayoutState) => state.toggleCapabilities;
+export const selectIsChangeReviewOpen = (state: LayoutState) => state.isChangeReviewOpen;
+export const selectChangeReviewTurnId = (state: LayoutState) => state.changeReviewTurnId;
+export const selectChangeReviewWidth = (state: LayoutState) => state.changeReviewWidth;
+export const selectToggleChangeReview = (state: LayoutState) => state.toggleChangeReview;
+export const selectSetChangeReviewTurnId = (state: LayoutState) => state.setChangeReviewTurnId;
+export const selectSetChangeReviewWidth = (state: LayoutState) => state.setChangeReviewWidth;
 export const selectSyncPanelVisibility = (state: LayoutState) => state.syncPanelVisibility;
 export const selectShowChatPanel = (state: LayoutState) => state.showChatPanel;
 export const selectTogglePanel = (state: LayoutState) => state.togglePanel;
@@ -277,7 +297,7 @@ export const selectSetShowLayoutDebug = (state: LayoutState) => state.setShowLay
 
 const layoutCache: { value: ResponsiveLayout | null } = { value: null };
 
-export type SettingsTab = 'basic' | 'api' | 'migration' | 'skills';
+export type SettingsTab = 'basic' | 'api' | 'migration' | 'skills' | 'mcp';
 
 interface LayoutState {
   showFpsOverlay: boolean;
@@ -292,6 +312,9 @@ interface LayoutState {
   isEditorOpen: boolean;
   isBrowserOpen: boolean;
   isBrowserSummaryOpen: boolean;
+  isChangeReviewOpen: boolean;
+  changeReviewTurnId: string | null;
+  changeReviewWidth: number;
   activeWorkspaceView: WorkspaceView;
   viewportWidth: number;
   sidebarWidth: number;
@@ -326,6 +349,10 @@ interface LayoutState {
   toggleBrowserSummary: () => void;
   toggleWorkflow: () => void;
   toggleSkills: () => void;
+  toggleCapabilities: () => void;
+  toggleChangeReview: (turnId?: string) => void;
+  setChangeReviewTurnId: (turnId: string | null) => void;
+  setChangeReviewWidth: (width: number) => void;
   clearActiveDiff: () => void;
   syncPanelVisibility: () => void;
   showChatPanel: () => void;
@@ -354,6 +381,9 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
   isEditorOpen: false,
   isBrowserOpen: false,
   isBrowserSummaryOpen: false,
+  isChangeReviewOpen: false,
+  changeReviewTurnId: null,
+  changeReviewWidth: DEFAULT_CHANGE_REVIEW_WIDTH,
   activeWorkspaceView: 'chat',
   viewportWidth: initialViewportWidth,
   sidebarWidth: 280,
@@ -430,6 +460,27 @@ export const useLayoutStore = create<LayoutState>((set, get) => ({
       isSettingsOpen: false,
       isUsageOpen: false,
     };
+  }),
+  toggleCapabilities: () => set((state) => {
+    const nextView: WorkspaceView = state.activeWorkspaceView === 'capabilities' ? 'chat' : 'capabilities';
+    return {
+      activeWorkspaceView: nextView,
+      singlePageView: nextView,
+      isEditorOpen: false,
+      isSettingsOpen: false,
+      isUsageOpen: false,
+    };
+  }),
+  toggleChangeReview: (turnId) => set((state) => {
+    const nextOpen = !state.isChangeReviewOpen;
+    return {
+      isChangeReviewOpen: nextOpen,
+      changeReviewTurnId: turnId ?? state.changeReviewTurnId,
+    };
+  }),
+  setChangeReviewTurnId: (turnId) => set({ changeReviewTurnId: turnId }),
+  setChangeReviewWidth: (width) => set({ 
+    changeReviewWidth: clamp(width, MIN_CHANGE_REVIEW_WIDTH, MAX_CHANGE_REVIEW_WIDTH) 
   }),
   clearActiveDiff: () => set({ activeDiffId: null }),
   syncPanelVisibility: () => {

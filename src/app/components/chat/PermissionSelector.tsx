@@ -31,7 +31,7 @@ interface PermissionSelectorProps {
 }
 
 /**
- * 工具权限选择按钮（输入框发送按钮左侧）。
+ * 权限 Profile 选择按钮（输入框发送按钮左侧）。
  *
  * 布局/交互参考模型选择器：触发按钮 + 向上弹出菜单。
  * 可选项随当前模式（yolo/agent/plan）变化；选择结果按会话持久化
@@ -89,7 +89,7 @@ export function PermissionSelector({ preserveComposerFocus }: PermissionSelector
         onMouseDown={preserveComposerFocus}
         onClick={toggleMenu}
         className="flex h-8 max-w-[44vw] sm:max-w-full items-center gap-1.5 rounded-xl px-2.5 text-muted-foreground transition-all hover:bg-muted/50 hover:text-foreground active:scale-95"
-        title={`工具权限：${TOOL_PERMISSION_LABELS[currentLevel]}`}
+        title={`权限 Profile：${TOOL_PERMISSION_LABELS[currentLevel]}（NoSandbox）`}
       >
         <CurrentIcon size={13} className="shrink-0" strokeWidth={2.1} />
         <span className="truncate text-[12px] font-medium tracking-tight">{TOOL_PERMISSION_LABELS[currentLevel]}</span>
@@ -108,8 +108,8 @@ export function PermissionSelector({ preserveComposerFocus }: PermissionSelector
               onMouseDown={(e) => e.stopPropagation()}
             >
               <div className="px-3 py-2 mb-1 flex items-center justify-between">
-                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.05em]">工具权限</span>
-                <span className="text-[10px] font-medium text-muted-foreground/70">{MODE_LABELS[currentMode]} 模式</span>
+                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-[0.05em]">权限 Profile</span>
+                <span className="text-[10px] font-medium text-muted-foreground/70">{MODE_LABELS[currentMode]} · NoSandbox</span>
               </div>
               <div className="max-h-64 overflow-y-auto custom-scrollbar-chat px-0.5">
                 {options.map((level) => {

@@ -2,6 +2,8 @@ import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react'
 import { motion, AnimatePresence } from 'motion/react';
 import { ZoomIn, ZoomOut, Move } from 'lucide-react';
 import { APPLE_CURVE, DURATION } from '../constants';
+import { RuntimeWorkflowEdge, RuntimeWorkflowNode, useSubagentStore } from '../store/useSubagentStore';
+import { TapScale } from './common/animations';
 
 interface WorkflowNode {
   id: string;
@@ -10,10 +12,11 @@ interface WorkflowNode {
   subtitle?: string;
   x: number;
   y: number;
-  status: 'pending' | 'running' | 'completed' | 'failed';
+  status: 'pending' | 'queued' | 'running' | 'completed' | 'failed' | 'skipped' | 'cancelled';
+  reason?: string;
 }
 
-interface WorkflowEdge {
+interface WorkflowEdge extends RuntimeWorkflowEdge {
   id: string;
   source: string;
   target: string;
@@ -25,24 +28,6 @@ const COL_GAP = 220;
 const ROW_GAP = 160;
 const START_X = 60;
 const CENTER_Y = 220;
-
-const MOCK_NODES: WorkflowNode[] = [
-  { id: 'start', type: 'start', title: '开始', subtitle: '工作流入口', x: START_X, y: CENTER_Y, status: 'completed' },
-  { id: 'search', type: 'search', title: '网页搜索', subtitle: '检索相关信息', x: START_X + COL_GAP, y: CENTER_Y - ROW_GAP / 2, status: 'completed' },
-  { id: 'code-search', type: 'code', title: '代码检索', subtitle: '搜索代码库', x: START_X + COL_GAP, y: CENTER_Y + ROW_GAP / 2, status: 'completed' },
-  { id: 'llm-process', type: 'llm', title: 'AI 处理', subtitle: '大模型推理', x: START_X + COL_GAP * 2, y: CENTER_Y, status: 'running' },
-  { id: 'condition', type: 'condition', title: '条件判断', subtitle: '结果验证', x: START_X + COL_GAP * 3, y: CENTER_Y, status: 'pending' },
-  { id: 'end', type: 'end', title: '结束', subtitle: '输出结果', x: START_X + COL_GAP * 4, y: CENTER_Y, status: 'pending' },
-];
-
-const MOCK_EDGES: WorkflowEdge[] = [
-  { id: 'e1', source: 'start', target: 'search' },
-  { id: 'e2', source: 'start', target: 'code-search' },
-  { id: 'e3', source: 'search', target: 'llm-process' },
-  { id: 'e4', source: 'code-search', target: 'llm-process' },
-  { id: 'e5', source: 'llm-process', target: 'condition' },
-  { id: 'e6', source: 'condition', target: 'end' },
-];
 
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 2;
@@ -90,6 +75,36 @@ function getNodeStyle(type: WorkflowNode['type'], status: WorkflowNode['status']
       subtitleColor: 'var(--muted-foreground)',
       checkColor: 'var(--muted-foreground)',
     },
+    skipped: {
+      bg: 'var(--background)',
+      border: 'var(--muted-foreground)',
+      borderWidth: 1,
+      iconBg: 'transparent',
+      iconColor: 'var(--muted-foreground)',
+      textColor: 'var(--muted-foreground)',
+      subtitleColor: 'var(--muted-foreground)',
+      checkColor: 'var(--muted-foreground)',
+    },
+    cancelled: {
+      bg: 'var(--muted)',
+      border: 'var(--muted-foreground)',
+      borderWidth: 1,
+      iconBg: 'transparent',
+      iconColor: 'var(--muted-foreground)',
+      textColor: 'var(--muted-foreground)',
+      subtitleColor: 'var(--muted-foreground)',
+      checkColor: 'var(--muted-foreground)',
+    },
+    queued: {
+      bg: 'var(--background)',
+      border: 'var(--border)',
+      borderWidth: 1,
+      iconBg: 'var(--muted)',
+      iconColor: 'var(--muted-foreground)',
+      textColor: 'var(--muted-foreground)',
+      subtitleColor: 'var(--muted-foreground)',
+      checkColor: 'var(--muted-foreground)',
+    },
     pending: {
       bg: 'var(--background)',
       border: 'var(--border)',
@@ -106,7 +121,10 @@ function getNodeStyle(type: WorkflowNode['type'], status: WorkflowNode['status']
   return { ...s, icon: typeIcons[type] };
 }
 
-function getEdgeStyle(sourceStatus: WorkflowNode['status'], targetStatus: WorkflowNode['status']) {
+function getEdgeStyle(sourceStatus: WorkflowNode['status'], targetStatus: WorkflowNode['status'], edgeStatus?: WorkflowEdge['status']) {
+  if (edgeStatus === 'failed') {
+    return { stroke: 'var(--destructive)', width: 1.5, opacity: 0.75, active: false };
+  }
   const bothCompleted = sourceStatus === 'completed' && targetStatus === 'completed';
   const isActive = sourceStatus === 'completed' && targetStatus === 'running';
 
@@ -127,8 +145,11 @@ export const WorkflowCanvas = React.memo(function WorkflowCanvas() {
   const [panStart, setPanStart] = useState({ x: 0, y: 0 });
   const [offsetStart, setOffsetStart] = useState({ x: 0, y: 0 });
 
-  const nodes = MOCK_NODES;
-  const edges = MOCK_EDGES;
+  const activeWorkflowRunId = useSubagentStore((s) => s.activeWorkflowRunId);
+  const run = useSubagentStore((s) => activeWorkflowRunId ? s.workflowRuns[activeWorkflowRunId] : null);
+
+  const nodes = useMemo(() => layoutWorkflowNodes(run?.nodes ?? []), [run?.nodes]);
+  const edges = useMemo(() => run?.edges ?? [], [run?.edges]);
 
   const nodeMap = useMemo(() => {
     const map = new Map<string, WorkflowNode>();
@@ -243,6 +264,12 @@ export const WorkflowCanvas = React.memo(function WorkflowCanvas() {
         }}
       />
 
+      {nodes.length === 0 && (
+        <div className="absolute inset-0 flex items-center justify-center px-6 text-center text-sm text-muted-foreground pointer-events-none">
+          暂无 workflow 运行状态。执行 run_workflow 后会显示实时 DAG。
+        </div>
+      )}
+
       {/* Edges: straight lines with manual arrowheads, all in screen coordinates */}
       <svg
         className="absolute inset-0 w-full h-full pointer-events-none"
@@ -258,7 +285,7 @@ export const WorkflowCanvas = React.memo(function WorkflowCanvas() {
           const tx = tgt.sx;
           const ty = tgt.sy + tgt.sh / 2;
 
-          const es = getEdgeStyle(src.status, tgt.status);
+          const es = getEdgeStyle(src.status, tgt.status, edge.status);
 
           // Compute arrowhead triangle
           const angle = Math.atan2(ty - sy, tx - sx);
@@ -274,6 +301,9 @@ export const WorkflowCanvas = React.memo(function WorkflowCanvas() {
 
           return (
             <g key={edge.id}>
+              {edge.reason && (
+                <title>{edge.reason}</title>
+              )}
               <line
                 x1={sx}
                 y1={sy}
@@ -309,6 +339,7 @@ export const WorkflowCanvas = React.memo(function WorkflowCanvas() {
         const style = getNodeStyle(node.type, node.status);
         const isRunning = node.status === 'running';
         const isCompleted = node.status === 'completed';
+        const isFailed = node.status === 'failed' || node.status === 'cancelled';
         const radius = Math.max(2, 8 * zoom);
 
         return (
@@ -376,6 +407,14 @@ export const WorkflowCanvas = React.memo(function WorkflowCanvas() {
                       {node.subtitle}
                     </span>
                   )}
+                  {node.reason && (
+                    <span
+                      className="truncate"
+                      style={{ color: style.subtitleColor, fontSize: 10 * zoom, lineHeight: 1.2 }}
+                    >
+                      {node.reason}
+                    </span>
+                  )}
                 </div>
 
                 {isCompleted && (
@@ -400,6 +439,10 @@ export const WorkflowCanvas = React.memo(function WorkflowCanvas() {
                     style={{ width: 8 * zoom, height: 8 * zoom }}
                   />
                 )}
+
+                {isFailed && (
+                  <span className="shrink-0 font-semibold" style={{ color: style.checkColor, fontSize: 12 * zoom }}>!</span>
+                )}
               </div>
             </div>
           </motion.div>
@@ -409,35 +452,35 @@ export const WorkflowCanvas = React.memo(function WorkflowCanvas() {
       {/* Zoom controls */}
       <div className="absolute bottom-4 right-4 z-10">
         <div className="flex items-center gap-0.5 rounded-xl border border-border bg-background/80 backdrop-blur-md p-1 shadow-lg">
-          <motion.button
+          <TapScale
+            as="button"
             whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
             onClick={handleZoomOut}
             className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
             aria-label="缩小"
           >
             <ZoomOut size={16} strokeWidth={1.5} />
-          </motion.button>
+          </TapScale>
 
-          <motion.button
+          <TapScale
+            as="button"
             whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
             onClick={handleResetZoom}
             className="h-8 px-2 rounded-lg flex items-center justify-center text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors min-w-[48px]"
             aria-label="重置缩放"
           >
             {zoomPercentage}%
-          </motion.button>
+          </TapScale>
 
-          <motion.button
+          <TapScale
+            as="button"
             whileHover={{ scale: 1.05 }}
-            whileTap={{ scale: 0.95 }}
             onClick={handleZoomIn}
             className="w-8 h-8 rounded-lg flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-accent/50 transition-colors"
             aria-label="放大"
           >
             <ZoomIn size={16} strokeWidth={1.5} />
-          </motion.button>
+          </TapScale>
         </div>
       </div>
 
@@ -461,3 +504,20 @@ export const WorkflowCanvas = React.memo(function WorkflowCanvas() {
     </section>
   );
 });
+
+function layoutWorkflowNodes(nodes: RuntimeWorkflowNode[]): WorkflowNode[] {
+  return nodes.map((node, index) => {
+    const col = index % 4;
+    const row = Math.floor(index / 4);
+    return {
+      id: node.id,
+      type: node.status === 'skipped' ? 'condition' : 'llm',
+      title: node.title,
+      subtitle: node.subtitle,
+      x: START_X + col * COL_GAP,
+      y: CENTER_Y + (row - 0.5) * ROW_GAP,
+      status: node.status,
+      reason: node.reason,
+    };
+  });
+}

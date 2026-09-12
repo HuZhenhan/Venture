@@ -30,6 +30,21 @@ export function StatusBadges({ skill }: { skill: SkillInfo }) {
           已禁用
         </span>
       )}
+      {skill.lifecycleStatus === 'review_required' && (
+        <span className="shrink-0 rounded-md bg-[#ff9f0a]/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#ff9f0a]">
+          需 Review
+        </span>
+      )}
+      {skill.lifecycleStatus === 'installing' && (
+        <span className="shrink-0 rounded-md bg-muted/60 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+          安装中
+        </span>
+      )}
+      {skill.lifecycleStatus === 'invalid' && (
+        <span className="shrink-0 rounded-md bg-[#d65a54]/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#d65a54]">
+          无效
+        </span>
+      )}
       {skill.permission === 'deny' && (
         <span className="shrink-0 rounded-md bg-[#d65a54]/10 px-1.5 py-0.5 text-[10px] font-semibold text-[#d65a54]">
           权限拒绝

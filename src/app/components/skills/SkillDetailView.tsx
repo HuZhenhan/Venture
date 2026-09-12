@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Check, Eye, Loader2, Pencil, X } from 'lucide-react';
+import { Check, Eye, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react';
 import { SkillInfo, getSkillFile } from '../../services/skillService';
 import {
   selectSelectedSkillName,
@@ -89,6 +89,18 @@ function SkillInfoPanel({ skill }: { skill: SkillInfo }) {
         </InfoSection>
       ) : null}
 
+      {skill.review ? (
+        <InfoSection title="本地静态检查">
+          <p className="py-1.5 text-[11px] leading-4 text-muted-foreground">{skill.review.summary}</p>
+          {skill.review.findings.slice(0, 6).map((finding) => (
+            <div key={`${finding.code}-${finding.path ?? 'skill'}-${finding.message}`} className="py-1.5 text-left text-[11px] leading-4">
+              <span className="font-semibold text-foreground">{finding.severity}</span>
+              <span className="text-muted-foreground"> · {finding.path ?? 'SKILL.md'} · {finding.message}</span>
+            </div>
+          ))}
+        </InfoSection>
+      ) : null}
+
       <InfoSection title="位置">
         <p className="break-all py-1.5 font-mono text-[10px] leading-4 text-muted-foreground">{skill.location}</p>
       </InfoSection>
@@ -115,19 +127,29 @@ export function SkillDetailView({ startInEdit }: SkillDetailViewProps) {
   const skills = useSkillStore(selectSkills);
   const shadowed = useSkillStore((state) => state.shadowed);
   const updateContent = useSkillStore((state) => state.updateContent);
+  const upsertResource = useSkillStore((state) => state.upsertResource);
+  const deleteResource = useSkillStore((state) => state.deleteResource);
+  const validate = useSkillStore((state) => state.validate);
 
-  const skill = [...skills, ...shadowed].find((item) => item.name === selectedSkillName) ?? null;
+  const skill = [...skills, ...shadowed].find((item) => item.canonicalName === selectedSkillName || item.name === selectedSkillName) ?? null;
 
   const [editing, setEditing] = useState(startInEdit);
   const [draft, setDraft] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [previewFile, setPreviewFile] = useState<{ path: string; content: string } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [resourceEditing, setResourceEditing] = useState(false);
+  const [resourceDraft, setResourceDraft] = useState('');
+  const [resourceSaving, setResourceSaving] = useState(false);
+  const [reviewSummary, setReviewSummary] = useState<string | null>(null);
 
   useEffect(() => {
     setEditing(startInEdit);
     setDraft(null);
     setPreviewFile(null);
+    setResourceEditing(false);
+    setResourceDraft('');
+    setReviewSummary(null);
   }, [selectedSkillName, startInEdit]);
 
   if (!skill) {
@@ -144,6 +166,8 @@ export function SkillDetailView({ startInEdit }: SkillDetailViewProps) {
     try {
       const content = await getSkillFile(selectedSkillName, path);
       setPreviewFile({ path, content });
+      setResourceEditing(false);
+      setResourceDraft(content);
     } catch (error) {
       console.warn('Failed to load skill file.', error);
     } finally {
@@ -170,13 +194,82 @@ export function SkillDetailView({ startInEdit }: SkillDetailViewProps) {
     }
   };
 
+  const handleCreateResource = async () => {
+    if (!selectedSkillName) return;
+    const path = window.prompt('输入资源文件路径，例如 assets/notes.md');
+    if (!path) return;
+    setResourceSaving(true);
+    try {
+      await upsertResource(selectedSkillName, path, '');
+      setPreviewFile({ path, content: '' });
+      setResourceDraft('');
+      setResourceEditing(true);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : '创建资源文件失败');
+    } finally {
+      setResourceSaving(false);
+    }
+  };
+
+  const handleSaveResource = async () => {
+    if (!selectedSkillName || !previewFile) return;
+    setResourceSaving(true);
+    try {
+      await upsertResource(selectedSkillName, previewFile.path, resourceDraft);
+      setPreviewFile({ path: previewFile.path, content: resourceDraft });
+      setResourceEditing(false);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : '保存资源文件失败');
+    } finally {
+      setResourceSaving(false);
+    }
+  };
+
+  const handleDeleteResource = async () => {
+    if (!selectedSkillName || !previewFile) return;
+    if (!window.confirm(`删除资源文件 ${previewFile.path}？`)) return;
+    setResourceSaving(true);
+    try {
+      await deleteResource(selectedSkillName, previewFile.path);
+      setPreviewFile(null);
+      setResourceDraft('');
+      setResourceEditing(false);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : '删除资源文件失败');
+    } finally {
+      setResourceSaving(false);
+    }
+  };
+
+  const handleValidate = async () => {
+    if (!selectedSkillName) return;
+    try {
+      const result = await validate(selectedSkillName);
+      setReviewSummary(result.review.summary);
+    } catch (error) {
+      setReviewSummary(error instanceof Error ? error.message : '校验失败');
+    }
+  };
+
   const markdownBody = skillContent ? stripFrontmatter(skillContent) : '';
 
   return (
     <div className="flex h-full flex-col overflow-hidden xl:flex-row">
       {/* 左：文件树 */}
       <div className="max-h-40 shrink-0 overflow-y-auto border-b border-border custom-scrollbar xl:h-full xl:max-h-none xl:w-44 xl:border-b-0 xl:border-r">
-        <div className="px-3 pb-1 pt-3 text-[10px] font-bold uppercase tracking-[0.15em] text-muted-foreground">文件</div>
+        <div className="flex items-center gap-1 px-3 pb-1 pt-3">
+          <span className="flex-1 text-[10px] font-bold uppercase tracking-[0.15em] text-muted-foreground">文件</span>
+          <button
+            type="button"
+            disabled={resourceSaving}
+            onClick={() => void handleCreateResource()}
+            className="flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+            aria-label="新建资源文件"
+            title="新建资源文件"
+          >
+            <Plus size={11} />
+          </button>
+        </div>
         <SkillFileTree tree={fileTree} selectedPath={previewFile?.path ?? null} onSelectFile={(path) => void handleSelectFile(path)} />
       </div>
 
@@ -199,6 +292,14 @@ export function SkillDetailView({ startInEdit }: SkillDetailViewProps) {
             <span className="truncate font-mono text-[11px] text-muted-foreground">SKILL.md</span>
           )}
           <span className="flex-1" />
+          <button
+            type="button"
+            onClick={() => void handleValidate()}
+            className="rounded-lg bg-muted/60 px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+            title="本地静态校验，不是 LLM 审计"
+          >
+            校验
+          </button>
           {editing ? (
             <>
               <button
@@ -219,6 +320,40 @@ export function SkillDetailView({ startInEdit }: SkillDetailViewProps) {
                 取消
               </button>
             </>
+          ) : previewFile ? (
+            <>
+              {resourceEditing ? (
+                <button
+                  type="button"
+                  disabled={resourceSaving}
+                  onClick={() => void handleSaveResource()}
+                  className="flex items-center gap-1 rounded-lg bg-foreground px-2 py-1 text-[11px] font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50"
+                >
+                  {resourceSaving ? <Loader2 size={11} className="animate-spin" /> : <Check size={11} />}
+                  保存资源
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => { setResourceDraft(previewFile.content); setResourceEditing(true); }}
+                  className="flex h-6 w-6 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  aria-label="编辑资源文件"
+                  title="编辑资源文件"
+                >
+                  <Pencil size={12} />
+                </button>
+              )}
+              <button
+                type="button"
+                disabled={resourceSaving}
+                onClick={() => void handleDeleteResource()}
+                className="flex h-6 w-6 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-[#d65a54] disabled:opacity-50"
+                aria-label="删除资源文件"
+                title="删除资源文件"
+              >
+                <Trash2 size={12} />
+              </button>
+            </>
           ) : (
             <button
               type="button"
@@ -233,10 +368,24 @@ export function SkillDetailView({ startInEdit }: SkillDetailViewProps) {
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto custom-scrollbar px-4 py-3">
+          {reviewSummary ? (
+            <div className="mb-3 rounded-xl border border-border bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground">
+              {reviewSummary}
+            </div>
+          ) : null}
           {previewFile ? (
-            <pre className="whitespace-pre-wrap break-all rounded-xl bg-muted/30 p-3 font-mono text-[11px] leading-5 text-foreground">
-              {previewLoading ? '加载中…' : previewFile.content}
-            </pre>
+            resourceEditing ? (
+              <textarea
+                value={resourceDraft}
+                onChange={(event) => setResourceDraft(event.target.value)}
+                spellCheck={false}
+                className="h-full min-h-[320px] w-full resize-none rounded-xl border border-border bg-muted/20 p-3 font-mono text-[11px] leading-5 text-foreground outline-none focus:border-foreground/30"
+              />
+            ) : (
+              <pre className="whitespace-pre-wrap break-all rounded-xl bg-muted/30 p-3 font-mono text-[11px] leading-5 text-foreground">
+                {previewLoading ? '加载中…' : previewFile.content}
+              </pre>
+            )
           ) : editing ? (
             <textarea
               value={draft ?? ''}

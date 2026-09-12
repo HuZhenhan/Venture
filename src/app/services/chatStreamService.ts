@@ -1,5 +1,6 @@
 import { getBackendBaseUrl, BackendRequestError } from './backendClient';
 import type { TokenUsage } from '../types';
+import { debugWarn } from '../utils/debugLogger';
 
 export type ChatMessageContentPart =
   | { type: 'text'; text: string }
@@ -21,6 +22,9 @@ export interface ChatMessage {
 }
 
 export interface StreamChatParams {
+  chatId?: string;
+  turnMessageId?: string;
+  assistantMessageId?: string;
   modelId: string;
   providerId?: string;
   messages: ChatMessage[];
@@ -30,14 +34,29 @@ export interface StreamChatParams {
   traceUpstream?: boolean;
 }
 
-export type StreamEvent =
-  | { event: 'message_start' }
-  | { event: 'reasoning_delta'; data: { delta: string } }
-  | { event: 'content_delta'; data: { delta: string } }
-  | { event: 'tool_call_start'; data: { index: number; id: string; name: string } }
-  | { event: 'tool_call_delta'; data: { index: number; arguments: string } }
-  | { event: 'message_done'; data: { usage?: UsageInfo | null; upstream_trace?: { request: { url: string; method: string; headers: Record<string, string>; body: unknown }; events: unknown[] } } }
-  | { event: 'error'; data: { code: string; message: string } };
+export interface UpstreamTrace {
+  request: { url: string; method: string; headers: Record<string, string>; body: unknown };
+  events: unknown[];
+  upstream_error?: { status?: number; body?: string };
+}
+
+interface ChatStreamEventBase {
+  schema_version: number;
+  chat_id: string;
+  turn_message_id: string;
+  sequence?: number;
+}
+
+export type ChatStreamEvent =
+  | (ChatStreamEventBase & { event: 'message_start'; data: Record<string, never> })
+  | (ChatStreamEventBase & { event: 'reasoning_delta'; data: { delta: string } })
+  | (ChatStreamEventBase & { event: 'content_delta'; data: { delta: string } })
+  | (ChatStreamEventBase & { event: 'tool_call_start'; data: { index: number; id: string; name: string } })
+  | (ChatStreamEventBase & { event: 'tool_call_delta'; data: { index: number; id?: string; name?: string; arguments?: string } })
+  | (ChatStreamEventBase & { event: 'message_done'; data: { usage?: UsageInfo | null; upstream_trace?: UpstreamTrace } })
+  | (ChatStreamEventBase & { event: 'error'; data: { code: string; message: string; upstream_trace?: UpstreamTrace } });
+
+export type StreamEvent = ChatStreamEvent;
 
 export type UsageInfo = TokenUsage;
 
@@ -55,6 +74,194 @@ export interface StreamHandle {
 interface SseFrame {
   event?: string;
   data: string;
+}
+
+const KNOWN_EVENTS = new Set<ChatStreamEvent['event']>([
+  'message_start',
+  'reasoning_delta',
+  'content_delta',
+  'tool_call_start',
+  'tool_call_delta',
+  'message_done',
+  'error',
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function stringValue(record: Record<string, unknown>, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function numberValue(record: Record<string, unknown>, key: string): number | undefined {
+  const value = record[key];
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function parseHeaders(value: unknown): Record<string, string> {
+  if (!isRecord(value)) return {};
+  const headers: Record<string, string> = {};
+  for (const [key, headerValue] of Object.entries(value)) {
+    if (typeof headerValue === 'string') headers[key] = headerValue;
+  }
+  return headers;
+}
+
+function parseUpstreamTrace(value: unknown): UpstreamTrace | undefined {
+  if (!isRecord(value) || !isRecord(value.request)) return undefined;
+  const request = value.request;
+  const trace: UpstreamTrace = {
+    request: {
+      url: stringValue(request, 'url') ?? '',
+      method: stringValue(request, 'method') ?? 'POST',
+      headers: parseHeaders(request.headers),
+      body: request.body,
+    },
+    events: Array.isArray(value.events) ? value.events : [],
+  };
+  if (isRecord(value.upstream_error)) {
+    trace.upstream_error = {
+      status: numberValue(value.upstream_error, 'status'),
+      body: stringValue(value.upstream_error, 'body'),
+    };
+  }
+  return trace;
+}
+
+function parseUsageInfo(value: unknown): UsageInfo | null | undefined {
+  if (value == null) return value;
+  if (!isRecord(value)) return undefined;
+  const usage: UsageInfo = {};
+  const keys: Array<Exclude<keyof UsageInfo, 'prompt_tokens_details'>> = [
+    'prompt_tokens',
+    'completion_tokens',
+    'total_tokens',
+    'prompt_cache_hit_tokens',
+    'prompt_cache_miss_tokens',
+  ];
+  for (const key of keys) {
+    const parsed = numberValue(value, key);
+    if (parsed !== undefined) usage[key] = parsed;
+  }
+  if (isRecord(value.prompt_tokens_details)) {
+    const cachedTokens = numberValue(value.prompt_tokens_details, 'cached_tokens');
+    if (cachedTokens !== undefined) usage.prompt_tokens_details = { cached_tokens: cachedTokens };
+  }
+  return usage;
+}
+
+function parseHttpErrorBody(value: unknown): { code: string; message: string } | null {
+  if (!isRecord(value) || !isRecord(value.error)) return null;
+  return {
+    code: stringValue(value.error, 'code') ?? 'UPSTREAM_STREAM_ERROR',
+    message: stringValue(value.error, 'message') ?? 'HTTP error',
+  };
+}
+
+function protocolError(
+  code: string,
+  message: string,
+  defaults: Pick<ChatStreamEventBase, 'chat_id' | 'turn_message_id'>,
+): ChatStreamEvent {
+  return {
+    event: 'error',
+    schema_version: 1,
+    chat_id: defaults.chat_id,
+    turn_message_id: defaults.turn_message_id,
+    data: { code, message },
+  };
+}
+
+function normalizeStreamEvent(
+  raw: unknown,
+  frameEvent: string | undefined,
+  defaults: Pick<ChatStreamEventBase, 'chat_id' | 'turn_message_id'>,
+): ChatStreamEvent {
+  if (!isRecord(raw)) throw new Error('SSE payload must be a JSON object');
+
+  const eventName = frameEvent ?? stringValue(raw, 'event') ?? stringValue(raw, 'type');
+  if (!eventName || !KNOWN_EVENTS.has(eventName as ChatStreamEvent['event'])) {
+    throw new Error(`Unknown SSE event: ${eventName ?? '(missing)'}`);
+  }
+  const payloadEvent = stringValue(raw, 'event');
+  if (frameEvent && payloadEvent && frameEvent !== payloadEvent) {
+    debugWarn('sse', 'event name mismatch', { frameEvent, payloadEvent });
+  }
+
+  const data = isRecord(raw.data) ? raw.data : {};
+  const sequence = numberValue(raw, 'sequence');
+  const base: ChatStreamEventBase = {
+    schema_version: numberValue(raw, 'schema_version') ?? 0,
+    chat_id: stringValue(raw, 'chat_id') ?? defaults.chat_id,
+    turn_message_id: stringValue(raw, 'turn_message_id') ?? defaults.turn_message_id,
+    ...(sequence !== undefined ? { sequence } : {}),
+  };
+
+  switch (eventName) {
+    case 'message_start':
+      return { ...base, event: 'message_start', data: {} };
+    case 'reasoning_delta': {
+      const delta = stringValue(data, 'delta');
+      if (delta === undefined) throw new Error('reasoning_delta.data.delta must be a string');
+      return { ...base, event: 'reasoning_delta', data: { delta } };
+    }
+    case 'content_delta': {
+      const delta = stringValue(data, 'delta');
+      if (delta === undefined) throw new Error('content_delta.data.delta must be a string');
+      return { ...base, event: 'content_delta', data: { delta } };
+    }
+    case 'tool_call_start': {
+      const index = numberValue(data, 'index');
+      const id = stringValue(data, 'id');
+      const name = stringValue(data, 'name');
+      if (index === undefined || id === undefined || name === undefined) {
+        throw new Error('tool_call_start requires numeric index, string id and string name');
+      }
+      return { ...base, event: 'tool_call_start', data: { index, id, name } };
+    }
+    case 'tool_call_delta': {
+      const index = numberValue(data, 'index');
+      const id = stringValue(data, 'id');
+      const name = stringValue(data, 'name');
+      const args = stringValue(data, 'arguments');
+      if (index === undefined) throw new Error('tool_call_delta.data.index must be a number');
+      return {
+        ...base,
+        event: 'tool_call_delta',
+        data: {
+          index,
+          ...(id !== undefined ? { id } : {}),
+          ...(name !== undefined ? { name } : {}),
+          ...(args !== undefined ? { arguments: args } : {}),
+        },
+      };
+    }
+    case 'message_done': {
+      const upstreamTrace = parseUpstreamTrace(data.upstream_trace);
+      return {
+        ...base,
+        event: 'message_done',
+        data: {
+          usage: parseUsageInfo(data.usage),
+          ...(upstreamTrace ? { upstream_trace: upstreamTrace } : {}),
+        },
+      };
+    }
+    case 'error': {
+      const upstreamTrace = parseUpstreamTrace(data.upstream_trace);
+      return {
+        ...base,
+        event: 'error',
+        data: {
+          code: stringValue(data, 'code') ?? 'UPSTREAM_STREAM_ERROR',
+          message: stringValue(data, 'message') ?? 'stream returned an error event',
+          ...(upstreamTrace ? { upstream_trace: upstreamTrace } : {}),
+        },
+      };
+    }
+  }
 }
 
 function parseSseBlock(block: string): SseFrame | null {
@@ -85,18 +292,27 @@ function parseSseBlock(block: string): SseFrame | null {
   return { event, data: dataLines.join('\n') };
 }
 
-function dispatchFrame(frame: SseFrame, onEvent: StreamEventCallback, trace?: TraceCallback): boolean {
+function dispatchFrame(
+  frame: SseFrame,
+  onEvent: StreamEventCallback,
+  defaults: Pick<ChatStreamEventBase, 'chat_id' | 'turn_message_id'>,
+  trace?: TraceCallback,
+): boolean {
   const trimmed = frame.data.trim();
   if (trimmed === '[DONE]') return true;
   if (!trimmed) return false;
   try {
-    const evt = JSON.parse(trimmed) as StreamEvent;
+    const parsed: unknown = JSON.parse(trimmed);
+    const evt = normalizeStreamEvent(parsed, frame.event, defaults);
     // Record raw response event before processing
     trace?.onResponseEvent(evt);
     onEvent(evt);
     if (evt.event === 'message_done' || evt.event === 'error') return true;
-  } catch {
-    // ignore malformed json
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    debugWarn('sse', 'failed to parse stream frame', { message, frameEvent: frame.event, data: trimmed });
+    onEvent(protocolError('STREAM_PARSE_ERROR', message, defaults));
+    return true;
   }
   return false;
 }
@@ -109,6 +325,9 @@ export async function streamChat(
 ): Promise<void> {
   const base = await getBackendBaseUrl();
   const body: Record<string, unknown> = {
+    chatId: params.chatId,
+    turnMessageId: params.turnMessageId,
+    assistantMessageId: params.assistantMessageId,
     modelId: params.modelId,
     providerId: params.providerId,
     messages: params.messages,
@@ -148,20 +367,22 @@ export async function streamChat(
     let code = 'UPSTREAM_STREAM_ERROR';
     let message = `HTTP ${res.status}`;
     try {
-      const json = await res.json();
-      if (json?.error) { code = json.error.code; message = json.error.message; }
+      const parsed: unknown = await res.json();
+      const parsedError = parseHttpErrorBody(parsed);
+      if (parsedError) ({ code, message } = parsedError);
     } catch { }
-    onEvent({ event: 'error', data: { code, message } });
+    onEvent(protocolError(code, message, { chat_id: params.chatId ?? '', turn_message_id: params.turnMessageId ?? '' }));
     return;
   }
 
   const reader = res.body?.getReader();
   if (!reader) {
-    onEvent({ event: 'error', data: { code: 'UPSTREAM_STREAM_ERROR', message: 'no response body' } });
+    onEvent(protocolError('UPSTREAM_STREAM_ERROR', 'no response body', { chat_id: params.chatId ?? '', turn_message_id: params.turnMessageId ?? '' }));
     return;
   }
 
-  onEvent({ event: 'message_start' });
+  const defaults = { chat_id: params.chatId ?? '', turn_message_id: params.turnMessageId ?? '' };
+  onEvent({ event: 'message_start', schema_version: 1, ...defaults, data: {} });
 
   const decoder = new TextDecoder();
   let buffer = '';
@@ -170,7 +391,7 @@ export async function streamChat(
   const consumeBlock = (block: string): boolean => {
     const frame = parseSseBlock(block);
     if (!frame) return false;
-    return dispatchFrame(frame, onEvent, trace);
+    return dispatchFrame(frame, onEvent, defaults, trace);
   };
 
   try {
@@ -210,11 +431,11 @@ export async function streamChat(
     }
 
     if (!doneSeen) {
-      onEvent({ event: 'message_done', data: { usage: null } });
+      onEvent({ event: 'message_done', schema_version: 1, ...defaults, data: { usage: null } });
     }
   } catch (err: unknown) {
     if (err instanceof DOMException && err.name === 'AbortError') return;
-    onEvent({ event: 'error', data: { code: 'UPSTREAM_STREAM_ERROR', message: String(err) } });
+    onEvent(protocolError('UPSTREAM_STREAM_ERROR', String(err), defaults));
   } finally {
     try { reader.releaseLock(); } catch { }
   }

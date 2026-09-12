@@ -160,14 +160,25 @@ function getBackendExePath() {
     return path.join(process.resourcesPath, 'venture-backend.exe');
   }
   // Cargo workspace 将二进制放在 workspace 根的 target/ 下
-  const gnuPath = path.join(__dirname, '..', 'backend', 'target', 'x86_64-pc-windows-gnu', 'debug', 'venture-backend.exe');
-  const msvcPath = path.join(__dirname, '..', 'backend', 'target', 'debug', 'venture-backend.exe');
-  const workspaceGnuPath = path.join(__dirname, '..', 'target', 'x86_64-pc-windows-gnu', 'debug', 'venture-backend.exe');
-  const workspaceMsvcPath = path.join(__dirname, '..', 'target', 'debug', 'venture-backend.exe');
-  if (fs.existsSync(gnuPath)) return gnuPath;
-  if (fs.existsSync(workspaceGnuPath)) return workspaceGnuPath;
-  if (fs.existsSync(workspaceMsvcPath)) return workspaceMsvcPath;
-  return msvcPath;
+  const gnuDebugPath = path.join(__dirname, '..', 'backend', 'target', 'x86_64-pc-windows-gnu', 'debug', 'venture-backend.exe');
+  const msvcDebugPath = path.join(__dirname, '..', 'backend', 'target', 'debug', 'venture-backend.exe');
+  const gnuReleasePath = path.join(__dirname, '..', 'backend', 'target', 'x86_64-pc-windows-gnu', 'release', 'venture-backend.exe');
+  const msvcReleasePath = path.join(__dirname, '..', 'backend', 'target', 'release', 'venture-backend.exe');
+  
+  const workspaceGnuDebugPath = path.join(__dirname, '..', 'target', 'x86_64-pc-windows-gnu', 'debug', 'venture-backend.exe');
+  const workspaceMsvcDebugPath = path.join(__dirname, '..', 'target', 'debug', 'venture-backend.exe');
+  const workspaceGnuReleasePath = path.join(__dirname, '..', 'target', 'x86_64-pc-windows-gnu', 'release', 'venture-backend.exe');
+  const workspaceMsvcReleasePath = path.join(__dirname, '..', 'target', 'release', 'venture-backend.exe');
+
+  if (fs.existsSync(gnuDebugPath)) return gnuDebugPath;
+  if (fs.existsSync(gnuReleasePath)) return gnuReleasePath;
+  if (fs.existsSync(msvcReleasePath)) return msvcReleasePath;
+  if (fs.existsSync(workspaceGnuDebugPath)) return workspaceGnuDebugPath;
+  if (fs.existsSync(workspaceGnuReleasePath)) return workspaceGnuReleasePath;
+  if (fs.existsSync(workspaceMsvcDebugPath)) return workspaceMsvcDebugPath;
+  if (fs.existsSync(workspaceMsvcReleasePath)) return workspaceMsvcReleasePath;
+  
+  return msvcDebugPath;
 }
 
 function getWebEntryPath() {
@@ -455,6 +466,16 @@ function normalizeBrowserUrl(input) {
   return `https://www.bing.com/search?q=${encodeURIComponent(value)}`;
 }
 
+function getBrowserNavigationBlockReason(url) {
+  try {
+    const parsed = new URL(String(url || ''));
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') return null;
+    return `已拦截导航：内置浏览器仅支持 HTTP/HTTPS 页面（${parsed.protocol}）。`;
+  } catch (_) {
+    return '已拦截导航：目标地址不是有效 URL。';
+  }
+}
+
 function getBrowserWebContents() {
   return browserViewRef?.webContents ?? null;
 }
@@ -475,6 +496,30 @@ function sendBrowserState(extra = {}) {
   } catch (err) {
     console.warn(`[browser] send state failed: ${err.message}`);
   }
+}
+
+function sendBrowserError(message, url) {
+  sendBrowserState({
+    isLoading: false,
+    error: message,
+    ...(url ? { url } : {}),
+  });
+}
+
+function registerBrowserCertificateHandler() {
+  app.on('certificate-error', (event, webContents, url, error, _certificate, callback) => {
+    const browserWebContents = getBrowserWebContents();
+    if (browserWebContents && webContents && browserWebContents.id === webContents.id) {
+      event.preventDefault();
+      const message = `证书错误：${error}。已阻止加载该页面。`;
+      console.warn(`[browser] certificate error url=${url} error=${error}`);
+      sendBrowserError(message, url);
+      callback(false);
+      return;
+    }
+
+    callback(false);
+  });
 }
 
 function ensureBrowserView() {
@@ -501,22 +546,40 @@ function ensureBrowserView() {
 
   const wc = view.webContents;
   wc.setWindowOpenHandler(({ url }) => {
+    const blockReason = getBrowserNavigationBlockReason(url);
+    if (blockReason) {
+      console.warn(`[browser] blocked window-open url=${url}`);
+      sendBrowserError(blockReason, wc.getURL() || BROWSER_DEFAULT_URL);
+      return { action: 'deny' };
+    }
+
     try {
       wc.loadURL(normalizeBrowserUrl(url));
     } catch (err) {
       console.warn(`[browser] open in-place failed: ${err.message}`);
-      safeOpenExternal(url);
+      sendBrowserError(`打开新窗口失败：${err.message}`, wc.getURL() || BROWSER_DEFAULT_URL);
     }
     return { action: 'deny' };
   });
-  wc.on('did-start-loading', () => sendBrowserState({ isLoading: true }));
+  wc.on('will-navigate', (event, url) => {
+    const blockReason = getBrowserNavigationBlockReason(url);
+    if (!blockReason) return;
+    event.preventDefault();
+    console.warn(`[browser] blocked navigation url=${url}`);
+    sendBrowserError(blockReason, wc.getURL() || BROWSER_DEFAULT_URL);
+  });
+  wc.on('did-start-loading', () => sendBrowserState({ isLoading: true, error: null }));
   wc.on('did-stop-loading', () => sendBrowserState({ isLoading: false }));
-  wc.on('did-navigate', (_event, url) => sendBrowserState({ url }));
-  wc.on('did-navigate-in-page', (_event, url) => sendBrowserState({ url }));
+  wc.on('did-navigate', (_event, url) => sendBrowserState({ url, error: null }));
+  wc.on('did-navigate-in-page', (_event, url) => sendBrowserState({ url, error: null }));
   wc.on('page-title-updated', (_event, title) => sendBrowserState({ title }));
   wc.on('did-fail-load', (_event, code, desc, url) => {
+    if (code === -3) {
+      sendBrowserState({ isLoading: false });
+      return;
+    }
     console.warn(`[browser] page load failed code=${code} desc="${desc}" url=${url}`);
-    sendBrowserState({ isLoading: false, error: desc, url });
+    sendBrowserError(`页面加载失败（${code}）：${desc}`, url || wc.getURL() || BROWSER_DEFAULT_URL);
   });
 
   console.log('[browser] BrowserView created');
@@ -636,6 +699,11 @@ function registerIpcHandlers() {
     const view = ensureBrowserView();
     setBrowserBounds({ ...payload.bounds, visible: true });
     const target = normalizeBrowserUrl(payload.url || view.webContents.getURL() || BROWSER_DEFAULT_URL);
+    const blockReason = getBrowserNavigationBlockReason(target);
+    if (blockReason) {
+      sendBrowserError(blockReason, view.webContents.getURL() || BROWSER_DEFAULT_URL);
+      return false;
+    }
     if (view.webContents.getURL() !== target) {
       await view.webContents.loadURL(target);
     }
@@ -646,6 +714,11 @@ function registerIpcHandlers() {
   ipcMain.handle('browser-navigate', async (_event, url) => {
     const view = ensureBrowserView();
     const target = normalizeBrowserUrl(url);
+    const blockReason = getBrowserNavigationBlockReason(target);
+    if (blockReason) {
+      sendBrowserError(blockReason, view.webContents.getURL() || BROWSER_DEFAULT_URL);
+      return false;
+    }
     await view.webContents.loadURL(target);
     sendBrowserState({ url: target, visible: browserVisible });
     return true;
@@ -863,6 +936,7 @@ if (!gotTheLock) {
     setupDevControlInput();
 
     registerIpcHandlers();
+    registerBrowserCertificateHandler();
 
     console.log('[main] starting backend...');
     startBackend();

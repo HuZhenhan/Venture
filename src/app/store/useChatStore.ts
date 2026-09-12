@@ -219,6 +219,8 @@ interface ChatState {
   preSelectedMode: ChatMode;
   /** 新会话（尚无 activeChat 时）预选的各模式权限级别。 */
   preSelectedPermissions: ToolPermissionsByMode;
+  /** 仅当前运行期有效的会话授权签名，不持久化。 */
+  sessionApprovedToolCalls: Record<string, string[]>;
   draftMessage: string;
   draftNodes: ComposerDraftNode[];
   draftReferences: ComposerReference[];
@@ -246,6 +248,12 @@ interface ChatState {
   setChatPermission: (id: string, mode: ChatMode, level: ToolPermissionLevel) => void;
   /** 追加"一律同意"白名单签名（随会话持久化，去重）。 */
   addApprovedToolSignature: (id: string, signature: string) => void;
+  /** 追加本运行期会话授权签名（不持久化）。 */
+  addSessionApprovedToolSignature: (id: string, signature: string) => void;
+  /** 撤销单条"一律同意"白名单签名。 */
+  removeApprovedToolSignature: (id: string, signature: string) => void;
+  /** 清空当前会话的所有"一律同意"白名单签名。 */
+  clearApprovedToolSignatures: (id: string) => void;
   setDraftMessage: (msg: string | ((prev: string) => string)) => void;
   setDraftNodes: (nodes: ComposerDraftNode[] | ((prev: ComposerDraftNode[]) => ComposerDraftNode[])) => void;
   setDraftReferences: (references: ComposerReference[] | ((prev: ComposerReference[]) => ComposerReference[])) => void;
@@ -281,6 +289,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   currentTasks: [],
   preSelectedMode: initialPreSelectedMode,
   preSelectedPermissions: initialPreSelectedPermissions,
+  sessionApprovedToolCalls: {},
   draftMessage: '',
   draftNodes: [],
   draftReferences: [],
@@ -361,6 +370,35 @@ export const useChatStore = create<ChatState>((set, get) => ({
       if (existing.includes(signature)) return chat;
       return { ...chat, approvedToolCalls: [...existing, signature] };
     });
+    persistChats(chats);
+    return { chats };
+  }),
+
+  addSessionApprovedToolSignature: (id, signature) => set((state) => {
+    const existing = state.sessionApprovedToolCalls[id] ?? [];
+    if (existing.includes(signature)) return state;
+    return {
+      sessionApprovedToolCalls: {
+        ...state.sessionApprovedToolCalls,
+        [id]: [...existing, signature],
+      },
+    };
+  }),
+
+  removeApprovedToolSignature: (id, signature) => set((state) => {
+    const chats = updateChatEntry(state.chats, id, (chat) => ({
+      ...chat,
+      approvedToolCalls: (chat.approvedToolCalls ?? []).filter((item) => item !== signature),
+    }));
+    persistChats(chats);
+    return { chats };
+  }),
+
+  clearApprovedToolSignatures: (id) => set((state) => {
+    const chats = updateChatEntry(state.chats, id, (chat) => ({
+      ...chat,
+      approvedToolCalls: [],
+    }));
     persistChats(chats);
     return { chats };
   }),

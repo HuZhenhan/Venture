@@ -18,7 +18,7 @@ import {
   SkillScopeFilter,
   SkillStatusFilter,
 } from '../../store/useSkillStore';
-import { AppleToggle } from '../settings/SettingsSidebarPanels';
+import { Toggle } from '../common';
 import { ScopeBadge, StatusBadges } from './skillUi';
 
 interface SkillListViewProps {
@@ -112,7 +112,7 @@ function SkillCardItem({ skill, shadowed, onOpenDetail }: { skill: SkillInfo; sh
         <StatusBadges skill={skill} />
         <span className="flex-1" />
         <span onClick={(event) => event.stopPropagation()}>
-          <AppleToggle
+          <Toggle
             size="sm"
             checked={skill.enabled}
             onChange={() => void setEnabled(skill.name, !skill.enabled)}

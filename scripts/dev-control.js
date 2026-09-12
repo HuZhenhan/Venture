@@ -47,7 +47,7 @@ async function findExistingDevControllers() {
   if (!isWindows) return [];
   const script = [
     'Get-CimInstance Win32_Process',
-    `Where-Object { $_.ProcessId -ne ${process.pid} -and $_.Name -eq 'node.exe' -and $_.CommandLine -match '(^|\\s|[\\\\/])scripts[\\\\/]dev-control\\.js(["'']|\\s|$)' }`,
+    `Where-Object { $_.ProcessId -ne ${process.pid} -and ( ($_.Name -eq 'node.exe' -and $_.CommandLine -match '(^|\\s|[\\\\/])scripts[\\\\/]dev-control\\.js(["'']|\\s|$)') -or ($_.Name -eq 'electron.exe' -and $_.CommandLine -match '${projectRoot.replace(/\\/g, '\\\\')}') -or ($_.Name -eq 'venture-backend.exe' -and $_.CommandLine -match '${projectRoot.replace(/\\/g, '\\\\')}') ) }`,
     'Select-Object -ExpandProperty ProcessId',
   ].join(' | ');
   const output = await runCommand('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script]);

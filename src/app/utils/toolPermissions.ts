@@ -1,4 +1,5 @@
-import { Chat, ChatMode, ToolPermissionLevel, ToolPermissionsByMode } from '../types';
+import { Chat, ChatMode, PermissionDecision, PermissionProfile, ToolPermissionLevel, ToolPermissionsByMode } from '../types';
+import type { ToolMetadata } from '../services/toolService';
 
 /**
  * 工具调用权限系统核心逻辑。
@@ -16,27 +17,80 @@ export const TOOL_PERMISSION_OPTIONS: Record<ChatMode, ToolPermissionLevel[]> = 
   plan: ['readonly', 'unrestricted', 'auto_review', 'general', 'ask_all'],
 };
 
-/** 各模式的默认权限级别（保持历史行为：全部放行）。 */
+/** 各模式的默认权限级别：默认不自动执行写入、命令、MCP、子代理等高风险能力。 */
 export const DEFAULT_TOOL_PERMISSION: Record<ChatMode, ToolPermissionLevel> = {
-  yolo: 'unrestricted',
-  agent: 'unrestricted',
-  plan: 'unrestricted',
+  yolo: 'general',
+  agent: 'general',
+  plan: 'readonly',
 };
 
 export const TOOL_PERMISSION_LABELS: Record<ToolPermissionLevel, string> = {
-  unrestricted: '无限制',
+  unrestricted: '受信任',
   auto_review: '自动审查',
   readonly: '只读',
-  general: '仅一般操作',
+  general: '标准确认',
   ask_all: '全部询问',
 };
 
 export const TOOL_PERMISSION_DESCRIPTIONS: Record<ToolPermissionLevel, string> = {
-  unrestricted: '自动执行所有工具调用',
-  auto_review: '执行前自动审查（暂未启用，同无限制）',
+  unrestricted: '读写与 Skill 可自动执行，命令/MCP/子代理仍需确认',
+  auto_review: '保守预留：高风险能力仍需你确认',
   readonly: '仅允许读取、搜索与任务管理工具',
-  general: '读写编辑自动执行，其余工具需询问',
+  general: '读取自动执行，写入/命令/网络/MCP/Skill/子代理需确认',
   ask_all: '所有工具调用都需要你同意',
+};
+
+export const TOOL_PERMISSION_PROFILES: Record<ToolPermissionLevel, PermissionProfile> = {
+  readonly: {
+    readFiles: 'allow',
+    writeFiles: 'deny',
+    executeCommands: 'deny',
+    networkAccess: 'deny',
+    mcpAccess: 'deny',
+    skillAccess: 'ask',
+    subagentAccess: 'deny',
+    sandbox: 'no_sandbox',
+  },
+  general: {
+    readFiles: 'allow',
+    writeFiles: 'ask',
+    executeCommands: 'ask',
+    networkAccess: 'ask',
+    mcpAccess: 'ask',
+    skillAccess: 'ask',
+    subagentAccess: 'ask',
+    sandbox: 'no_sandbox',
+  },
+  ask_all: {
+    readFiles: 'ask',
+    writeFiles: 'ask',
+    executeCommands: 'ask',
+    networkAccess: 'ask',
+    mcpAccess: 'ask',
+    skillAccess: 'ask',
+    subagentAccess: 'ask',
+    sandbox: 'no_sandbox',
+  },
+  auto_review: {
+    readFiles: 'audit_only',
+    writeFiles: 'ask',
+    executeCommands: 'ask',
+    networkAccess: 'ask',
+    mcpAccess: 'ask',
+    skillAccess: 'audit_only',
+    subagentAccess: 'ask',
+    sandbox: 'no_sandbox',
+  },
+  unrestricted: {
+    readFiles: 'allow',
+    writeFiles: 'allow',
+    executeCommands: 'ask',
+    networkAccess: 'ask',
+    mcpAccess: 'ask',
+    skillAccess: 'allow',
+    subagentAccess: 'ask',
+    sandbox: 'no_sandbox',
+  },
 };
 
 // ─── 工具分类 ───────────────────────────────────────────────────────────────
@@ -51,16 +105,16 @@ const READONLY_ALLOWED_TOOLS = new Set([
   'taskupdate',
   'tasklist',
   'taskget',
+  'todocreate',
+  'todoupdate',
+  'todolist',
+  'todoget',
   'list_skill',
-  'load_skill',
 ]);
 
-/** 仅一般操作级别自动放行的工具（小写工具名）= 只读集 + 写入/编辑。 */
-const GENERAL_ALLOWED_TOOLS = new Set([
-  ...READONLY_ALLOWED_TOOLS,
-  'write',
-  'edit',
-]);
+const WRITE_TOOLS = new Set(['write', 'edit']);
+const SKILL_TOOLS = new Set(['load_skill']);
+const SUBAGENT_TOOLS = new Set(['spawn_agent', 'get_agent_output', 'kill_agent', 'run_workflow', 'kill_workflow']);
 
 /** 无论何种权限级别都不需要授权卡片的工具（自身即是交互工具）。 */
 const ALWAYS_ALLOWED_TOOLS = new Set(['askuserquestion']);
@@ -68,6 +122,49 @@ const ALWAYS_ALLOWED_TOOLS = new Set(['askuserquestion']);
 // ─── 判定结果 ───────────────────────────────────────────────────────────────
 
 export type ToolPermissionDecision = 'allow' | 'deny' | 'ask';
+
+export type PermissionCapability = keyof Omit<PermissionProfile, 'sandbox'>;
+
+const CAPABILITY_LABELS: Record<PermissionCapability, string> = {
+  readFiles: '读取文件',
+  writeFiles: '写入文件',
+  executeCommands: '执行命令',
+  networkAccess: '网络访问',
+  mcpAccess: 'MCP 工具',
+  skillAccess: 'Skill 加载',
+  subagentAccess: '子代理',
+};
+
+export function getPermissionProfileForLevel(level: ToolPermissionLevel): PermissionProfile {
+  return TOOL_PERMISSION_PROFILES[level] ?? TOOL_PERMISSION_PROFILES.general;
+}
+
+export function getToolCapability(toolName: string): PermissionCapability {
+  const normalized = toolName.toLowerCase();
+  if (READONLY_ALLOWED_TOOLS.has(normalized)) return 'readFiles';
+  if (WRITE_TOOLS.has(normalized)) return 'writeFiles';
+  if (SKILL_TOOLS.has(normalized)) return 'skillAccess';
+  if (SUBAGENT_TOOLS.has(normalized)) return 'subagentAccess';
+  if (normalized.startsWith('mcp_') || normalized.includes('mcp')) return 'mcpAccess';
+  if (normalized.includes('web') || normalized.includes('fetch') || normalized.includes('search')) return 'networkAccess';
+  return 'executeCommands';
+}
+
+export function riskLevelForTool(toolName: string, metadata?: ToolMetadata): 'low' | 'medium' | 'high' {
+  if (metadata?.riskLevel) return metadata.riskLevel;
+  const capability = getToolCapability(toolName);
+  if (capability === 'writeFiles' || capability === 'executeCommands' || capability === 'networkAccess' || capability === 'mcpAccess') {
+    return 'high';
+  }
+  if (capability === 'skillAccess' || capability === 'subagentAccess') return 'medium';
+  return 'low';
+}
+
+export function impactSummaryForTool(toolName: string, input: unknown): string {
+  const record = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+  const value = record.file_path ?? record.path ?? record.url ?? record.command ?? record.name ?? record.subagent_type;
+  return typeof value === 'string' && value.trim().length > 0 ? value : toolName;
+}
 
 // ─── 签名（"一律同意"白名单用）─────────────────────────────────────────────
 
@@ -123,6 +220,7 @@ export interface EvaluateToolCallArgs {
   mode: ChatMode;
   toolName: string;
   input: unknown;
+  metadata?: ToolMetadata;
   /** "一律同意"白名单签名集合。 */
   approvedSignatures: readonly string[];
 }
@@ -138,6 +236,7 @@ export function evaluateToolCall({
   mode,
   toolName,
   input,
+  metadata,
   approvedSignatures,
 }: EvaluateToolCallArgs): ToolPermissionDecision {
   const normalized = toolName.toLowerCase();
@@ -147,32 +246,13 @@ export function evaluateToolCall({
     return 'allow';
   }
 
-  switch (level) {
-    case 'unrestricted':
-      return 'allow';
+  void metadata;
 
-    case 'auto_review':
-      // TODO: 自动审查接口预留——后续在此接入自动审查流程（如二次模型评估）。
-      // 当前保持与「无限制」一致的行为。
-      return 'allow';
-
-    case 'readonly':
-      return READONLY_ALLOWED_TOOLS.has(normalized) ? 'allow' : 'deny';
-
-    case 'general': {
-      if (GENERAL_ALLOWED_TOOLS.has(normalized)) {
-        return 'allow';
-      }
-      // yolo 模式下「仅一般操作」：权限外工具直接自动拒绝，不询问
-      if (mode === 'yolo') {
-        return 'deny';
-      }
-      return approvedSignatures.includes(toolSignature(toolName, input)) ? 'allow' : 'ask';
-    }
-
-    case 'ask_all':
-      return approvedSignatures.includes(toolSignature(toolName, input)) ? 'allow' : 'ask';
-  }
+  const profile = getPermissionProfileForLevel(level);
+  const configuredDecision: PermissionDecision = profile[getToolCapability(normalized)];
+  if (configuredDecision === 'allow' || configuredDecision === 'audit_only') return 'allow';
+  if (configuredDecision === 'deny' || mode === 'yolo') return 'deny';
+  return approvedSignatures.includes(toolSignature(toolName, input)) ? 'allow' : 'ask';
 }
 
 // ─── 拒绝文案 ───────────────────────────────────────────────────────────────
@@ -180,7 +260,31 @@ export function evaluateToolCall({
 /** 权限不足被自动拒绝时回填给模型的输出。 */
 export function permissionDeniedOutput(level: ToolPermissionLevel, toolName: string): string {
   const levelLabel = TOOL_PERMISSION_LABELS[level] ?? level;
-  return `权限不足：当前权限级别为「${levelLabel}」，工具 ${toolName} 不在允许范围内，本次调用已被自动拒绝。请调整方案，仅使用当前权限允许的工具。`;
+  const capability = CAPABILITY_LABELS[getToolCapability(toolName)];
+  return `权限不足：当前权限 profile 为「${levelLabel}」，${capability}能力不允许工具 ${toolName} 自动执行，本次调用已被拒绝。请调整方案或请求用户确认。`;
+}
+
+export interface PermissionRequestCopy {
+  title: string;
+  description: string;
+  inputLabel: string;
+  timeoutHint?: string;
+}
+
+export function buildPermissionRequestCopy(args: {
+  actor: 'tool' | 'subagent';
+  toolName: string;
+  reason?: string;
+  timeoutSeconds?: number;
+}): PermissionRequestCopy {
+  const capability = CAPABILITY_LABELS[getToolCapability(args.toolName)];
+  const actor = args.actor === 'subagent' ? '子代理' : '工具调用';
+  return {
+    title: `${actor}请求使用：${args.toolName}`,
+    description: args.reason ?? `${capability}能力需要用户确认后才能继续。`,
+    inputLabel: '传入参数',
+    timeoutHint: args.timeoutSeconds ? `${args.timeoutSeconds} 秒无响应将自动拒绝` : undefined,
+  };
 }
 
 /** 用户在询问卡片上点击「拒绝」时回填给模型的输出。 */

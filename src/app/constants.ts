@@ -10,6 +10,9 @@ export const MAX_EDITOR_WIDTH = 880;
 export const BROWSER_PANEL_WIDTH = 500;
 export const MIN_BROWSER_WIDTH = 360;
 export const MIN_SETTINGS_WIDTH = 320;
+export const DEFAULT_CHANGE_REVIEW_WIDTH = 680;
+export const MIN_CHANGE_REVIEW_WIDTH = 400;
+export const MAX_CHANGE_REVIEW_WIDTH = 960;
 export const CHAT_EDITOR_GUTTER = 520;
 
 export const APPLE_CURVE = [0.32, 0.72, 0, 1] as const;
@@ -38,4 +41,13 @@ export const CARD_EXPAND_TRANSITION = {
   duration: DURATION.cardExpand,
   ease: APPLE_CURVE,
   opacity: { duration: DURATION.fast + 0.12 },
+} as const;
+
+export const Z_INDEX = {
+  base: 10,              // ChatArea, 工作区面板
+  rail: 30,              // RightPanelRail
+  desktopPanel: 40,      // Settings/Usage (desktop mode)
+  overlay: 50,           // Sidebar overlay, SinglePage overlay
+  changeReview: 50,      // ChangeReview 与其他 overlay 同级
+  sidebarOverlay: 50,    // Sidebar (overlay mode)
 } as const;

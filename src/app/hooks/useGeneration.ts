@@ -18,15 +18,18 @@ import {
   getVisibleText,
   serializeError,
 } from '../utils/messageContentProtocol';
-import { executeTool } from '../services/toolService';
+import { auditPermissionDecision, executeTool, getToolMetadata } from '../services/toolService';
 import { useSubagentStore } from '../store/useSubagentStore';
 import { usePreferencesStore } from '../store/usePreferencesStore';
 import { debugError } from '../utils/debugLogger';
+import { resolveModelCapabilities } from '../utils/modelCapabilities';
 import {
   APPROVAL_EXPIRED_OUTPUT,
   evaluateToolCall,
+  getPermissionProfileForLevel,
   permissionDeniedOutput,
   resolvePermissionForChat,
+  toolSignature,
 } from '../utils/toolPermissions';
 
 const DEFAULT_CHAT_TEMPERATURE = 0.8;
@@ -145,6 +148,7 @@ async function generateAndApplyTitles(chatId: string, messageId: string, modelId
 
   const normalizedContent = adaptLegacyMessageContent(aiMessage);
   const reasoning = aiMessage.reasoning || getThinkingText(normalizedContent);
+  const assistantVisibleContent = getVisibleText(normalizedContent);
   const firstUserMessage = chat.messages.find((message) => message.role === 'user');
   const isFirstAssistantReply =
     chat.messages.filter((message) => message.role === 'user').length === 1 &&
@@ -154,7 +158,7 @@ async function generateAndApplyTitles(chatId: string, messageId: string, modelId
     generateReasoningTitle({
       modelId,
       reasoning,
-      assistantMessage: aiMessage.reasoning != null ? aiMessage.content : getVisibleText(normalizedContent),
+      assistantMessage: assistantVisibleContent,
     })
       .then((title) => {
         if (!title) return;
@@ -175,7 +179,7 @@ async function generateAndApplyTitles(chatId: string, messageId: string, modelId
     generateConversationTitle({
       modelId,
       userMessage: firstUserMessage.content,
-      assistantMessage: aiMessage.reasoning != null ? aiMessage.content : getVisibleText(normalizedContent),
+      assistantMessage: assistantVisibleContent,
     })
       .then((title) => {
         if (!title) return;
@@ -287,21 +291,45 @@ export function useGeneration() {
         const latestChat = useChatStore.getState().chats.find((c) => c.id === chatId);
         const currentMode = latestChat?.mode ?? 'agent';
         const permissionLevel = resolvePermissionForChat(latestChat, currentMode);
-        const decision: 'allow' | 'deny' | 'ask' = tool.approvalGranted
+        const metadata = await getToolMetadata(tool.name);
+        const signature = toolSignature(tool.name, tool.input);
+        const approvedBySession = (useChatStore.getState().sessionApprovedToolCalls[chatId] ?? []).includes(signature);
+        const approvedBySignature = (latestChat?.approvedToolCalls ?? []).includes(signature);
+        const decision = tool.approvalGranted || approvedBySession || approvedBySignature
           ? 'allow'
           : evaluateToolCall({
               level: permissionLevel,
               mode: currentMode,
               toolName: tool.name,
               input: tool.input,
+              metadata,
               approvedSignatures: latestChat?.approvedToolCalls ?? [],
             });
 
         if (decision === 'deny') {
+          auditPermissionDecision({
+            tool: tool.name,
+            input: tool.input,
+            chatId,
+            turnMessageId,
+            toolCallId: tool.id,
+            permissionProfile: getPermissionProfileForLevel(permissionLevel),
+            approvalScope: 'once',
+            userChoice: 'rejected',
+          }).catch((error) => {
+            console.warn('Failed to audit denied tool permission.', error);
+          });
           // 权限不足（只读 / yolo 下仅一般操作）：自动拒绝，结果回填给模型
           updatedTools = updatedTools.map((t) =>
             t.id === tool.id
-              ? { ...t, status: 'failed' as ToolCallStatus, output: permissionDeniedOutput(permissionLevel, tool.name) }
+              ? {
+                  ...t,
+                  status: 'failed' as ToolCallStatus,
+                  output: permissionDeniedOutput(permissionLevel, tool.name),
+                  description: metadata?.description ?? t.description,
+                  riskLevel: metadata?.riskLevel ?? t.riskLevel,
+                  permissionPrompt: metadata?.permission.permissionPrompt ?? t.permissionPrompt,
+                }
               : t
           );
           updateMessageInChat(chatId, messageId, (msg) => ({
@@ -315,7 +343,15 @@ export function useGeneration() {
           // 需要用户授权：标记 needs_approval 并暂停工具循环，等待询问卡片结果。
           // 状态随会话持久化，即使关闭软件，重新打开后卡片仍会正常显示。
           updatedTools = updatedTools.map((t) =>
-            t.id === tool.id ? { ...t, status: 'needs_approval' as ToolCallStatus } : t
+            t.id === tool.id
+              ? {
+                  ...t,
+                  status: 'needs_approval' as ToolCallStatus,
+                  description: metadata?.description ?? t.description,
+                  riskLevel: metadata?.riskLevel ?? t.riskLevel,
+                  permissionPrompt: metadata?.permission.permissionPrompt ?? t.permissionPrompt,
+                }
+              : t
           );
           updateMessageInChat(chatId, messageId, (msg) => ({
             ...msg,
@@ -327,7 +363,15 @@ export function useGeneration() {
         }
 
         updatedTools = updatedTools.map((t) =>
-          t.id === tool.id ? { ...t, status: 'running' as ToolCallStatus } : t
+          t.id === tool.id
+            ? {
+                ...t,
+                status: 'running' as ToolCallStatus,
+                description: metadata?.description ?? t.description,
+                riskLevel: metadata?.riskLevel ?? t.riskLevel,
+                permissionPrompt: metadata?.permission.permissionPrompt ?? t.permissionPrompt,
+              }
+            : t
         );
         updateMessageInChat(chatId, messageId, (msg) => ({
           ...msg,
@@ -341,6 +385,11 @@ export function useGeneration() {
             chatId,
             turnMessageId,
             modelId,
+            permissionProfile: getPermissionProfileForLevel(permissionLevel),
+            approvalGranted: Boolean(tool.approvalGranted || approvedBySession || approvedBySignature),
+            toolCallId: tool.id,
+            approvalScope: approvedBySignature ? 'permanent' : approvedBySession ? 'session' : tool.approvalGranted ? 'once' : undefined,
+            userChoice: approvedBySignature ? 'always_approved' : tool.approvalGranted || approvedBySession ? 'approved' : 'none',
           });
           const status: ToolCallStatus = result.isError ? 'failed' : 'completed';
           updatedTools = updatedTools.map((t) =>
@@ -521,6 +570,9 @@ export function useGeneration() {
       const activeProvider = modelSelection?.provider;
       const activeModel = modelSelection?.model;
       const resolvedModelId = activeModel?.id;
+      const activeModelCapabilities = activeProvider && activeModel
+        ? resolveModelCapabilities(activeModel, activeProvider)
+        : null;
 
       if (!activeProvider || !activeModel || !resolvedModelId) {
         const errorContent = formatErrorContent('MODEL_NOT_FOUND', '未找到可用模型，请在设置中启用一个模型。');
@@ -570,7 +622,7 @@ export function useGeneration() {
                 (msg.blocks ?? []).find((b) => b.type === 'reference_list')?.references ?? [],
                 [],
               ),
-              activeModel.supportsMultimodal ?? false,
+              activeModelCapabilities?.supportsMultimodal ?? false,
             )
           : buildChatMessageContentFromProtocol(content, false);
 
@@ -733,6 +785,9 @@ export function useGeneration() {
       try {
         await streamChat(
           {
+            chatId,
+            turnMessageId,
+            assistantMessageId: aiMessageId,
             modelId: resolvedModelId,
             providerId: activeProvider.id,
             messages: apiMessages,
@@ -760,13 +815,15 @@ export function useGeneration() {
             } else if (event.event === 'tool_call_start') {
               const { index, id, name } = event.data;
               const existing = toolCallAccumulator.current.get(index) ?? { id: '', name: '', arguments: '' };
-              existing.id = id;
-              existing.name = name;
+              if (id) existing.id = id;
+              if (name) existing.name = name;
               toolCallAccumulator.current.set(index, existing);
             } else if (event.event === 'tool_call_delta') {
-              const { index, arguments: args } = event.data;
+              const { index, id, name, arguments: args } = event.data;
               const existing = toolCallAccumulator.current.get(index) ?? { id: '', name: '', arguments: '' };
-              existing.arguments += args;
+              if (id) existing.id = id;
+              if (name) existing.name = name;
+              if (args) existing.arguments += args;
               toolCallAccumulator.current.set(index, existing);
             } else if (event.event === 'message_done') {
               // 提取上游追踪数据
@@ -779,16 +836,35 @@ export function useGeneration() {
               // 从累积器提取 tool calls
               const accumulated = Array.from(toolCallAccumulator.current.entries())
                 .sort(([a], [b]) => a - b)
-                .map(([_, tc]) => {
+                .map(([index, tc]) => {
                   let input: unknown = {};
-                  if (tc.arguments) {
-                    try { input = JSON.parse(tc.arguments); } catch { /* keep as string fallback */ }
+                  let status: ToolCallStatus = 'pending';
+                  let output: string | undefined;
+                  if (!tc.arguments.trim()) {
+                    status = 'failed';
+                    output = '工具调用格式无效：缺少工具参数。';
+                  } else {
+                    try {
+                      input = JSON.parse(tc.arguments);
+                    } catch {
+                      status = 'failed';
+                      output = `工具调用参数不是合法 JSON：${tc.arguments}`;
+                    }
+                  }
+                  if (!tc.id) {
+                    status = 'failed';
+                    output = '工具调用格式无效：缺少工具调用 ID。';
+                  }
+                  if (!tc.name.trim()) {
+                    status = 'failed';
+                    output = '工具调用格式无效：缺少工具名。';
                   }
                   return {
-                    id: tc.id,
-                    name: tc.name,
+                    id: tc.id || `tool-call-${index}`,
+                    name: tc.name.trim() || '(unknown)',
                     input,
-                    status: 'pending' as ToolCallStatus,
+                    status,
+                    ...(output ? { output } : {}),
                   };
                 });
 

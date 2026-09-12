@@ -9,15 +9,21 @@ import {
   SkillSettings,
   SkillSettingsResult,
   createSkill,
+  deleteSkillFile,
   deleteSkill,
   getSkillContent,
   getSkillFiles,
   getSkillSettings,
+  importSkillZip,
   listSkills,
   refreshSkills,
   saveSkillSettings,
   setSkillEnabled,
+  upsertSkillFile,
   updateSkillContent,
+  validateSkill,
+  SkillImportResult,
+  SkillValidationResult,
 } from '../services/skillService';
 
 export type SkillStatusFilter = 'all' | 'enabled' | 'disabled';
@@ -45,7 +51,11 @@ interface SkillState {
   refresh: () => Promise<void>;
   select: (name: string | null) => Promise<void>;
   create: (payload: CreateSkillPayload) => Promise<void>;
+  importZip: (file: File) => Promise<SkillImportResult>;
   updateContent: (name: string, content: string) => Promise<void>;
+  upsertResource: (name: string, path: string, content: string) => Promise<void>;
+  deleteResource: (name: string, path: string) => Promise<void>;
+  validate: (name: string) => Promise<SkillValidationResult>;
   remove: (name: string) => Promise<void>;
   setEnabled: (name: string, enabled: boolean) => Promise<void>;
   loadSettings: () => Promise<void>;
@@ -111,6 +121,12 @@ export const useSkillStore = create<SkillState>((set, get) => ({
     await get().refresh();
   },
 
+  importZip: async (file) => {
+    const result = await importSkillZip(file);
+    await get().refresh();
+    return result;
+  },
+
   updateContent: async (name, content) => {
     await updateSkillContent(name, content);
     if (get().selectedSkillName === name) {
@@ -118,6 +134,26 @@ export const useSkillStore = create<SkillState>((set, get) => ({
     }
     await get().refresh();
   },
+
+  upsertResource: async (name, path, content) => {
+    await upsertSkillFile(name, path, content);
+    if (get().selectedSkillName === name) {
+      const tree = await getSkillFiles(name);
+      set({ fileTree: tree });
+    }
+    await get().refresh();
+  },
+
+  deleteResource: async (name, path) => {
+    await deleteSkillFile(name, path);
+    if (get().selectedSkillName === name) {
+      const tree = await getSkillFiles(name);
+      set({ fileTree: tree });
+    }
+    await get().refresh();
+  },
+
+  validate: async (name) => validateSkill(name),
 
   remove: async (name) => {
     await deleteSkill(name);

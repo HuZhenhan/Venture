@@ -2,7 +2,6 @@ import { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Check,
-  ChevronDown,
   CircleAlert,
   Eye,
   FilePen,
@@ -22,10 +21,11 @@ import {
   XCircle,
 } from 'lucide-react';
 import { SkillCall, ToolCall, ToolCallStatus } from '../../../types';
-import { APPLE_CURVE, CARD_EXPAND_TRANSITION, CARD_HEADER_TRANSITION } from '../../../constants';
+import { APPLE_CURVE, CARD_EXPAND_TRANSITION } from '../../../constants';
 import { getToolCardClasses } from './toolCardStyles';
 import { ExpandableCard, StatusHeader } from './ExpandableCard';
 import { SkillCard } from './SkillCard';
+import { BaseCard } from './BaseCard';
 
 interface ToolCallCardProps {
   tool: ToolCall;
@@ -233,6 +233,7 @@ function GenericToolCallCard({ tool }: ToolCallCardProps) {
   const summary = inputSummary(tool);
   const formattedInput = formatInput(tool.input);
   const formattedOutput = tool.output ?? '';
+  const riskLabel = tool.riskLevel === 'high' ? '高风险' : tool.riskLevel === 'medium' ? '中风险' : '低风险';
 
   const statusColorClass = isError
     ? 'text-[#d65a54]'
@@ -251,24 +252,19 @@ function GenericToolCallCard({ tool }: ToolCallCardProps) {
         : 'bg-muted/50';
 
   return (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.95, y: 10 }}
-      animate={{ opacity: 1, scale: 1, y: 0 }}
-      transition={{ duration: 0.6, ease: APPLE_CURVE }}
-      className="w-full max-w-[651px] overflow-hidden rounded-2xl border border-border text-left shadow-[0_8px_20px_-20px_rgba(3,2,19,0.15)] transition-[border-color,box-shadow] duration-500 ease-[cubic-bezier(0.32,0.72,0,1)]"
-    >
-      <button
-        type="button"
-        onClick={() => setIsExpanded((v) => !v)}
-        className="flex w-full items-center gap-3 rounded-xl px-4 py-2.5 text-left transition-colors duration-500 hover:bg-muted/40"
-      >
+    <BaseCard
+      expanded={isExpanded}
+      onExpandedChange={setIsExpanded}
+      icon={
         <span className={`flex size-5 shrink-0 items-center justify-center rounded-full ${statusBgClass}`}>
           <StatusIcon
             size={12}
             className={`${statusColorClass} ${isRunning ? 'animate-spin' : ''}`}
           />
         </span>
-        <div className="min-w-0 flex-1 flex items-center gap-2">
+      }
+      headerContent={
+        <>
           <ToolIcon size={13} className="shrink-0 text-muted-foreground" />
           <span className={`text-[12px] font-medium tracking-tight whitespace-nowrap ${styles.eyebrow}`}>
             {statusMeta.label}
@@ -276,26 +272,20 @@ function GenericToolCallCard({ tool }: ToolCallCardProps) {
           <span className="truncate text-[12px] font-semibold tracking-tight text-foreground">
             {tool.name}
           </span>
+          {tool.riskLevel ? (
+            <span className="shrink-0 rounded-full border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              {riskLabel}
+            </span>
+          ) : null}
           {summary ? (
             <span className="truncate text-[12px] text-muted-foreground/80 font-mono">
               {truncateForHeader(summary)}
             </span>
           ) : null}
-        </div>
-        <motion.span animate={{ rotate: isExpanded ? 0 : 180 }} transition={CARD_HEADER_TRANSITION} className="shrink-0">
-          <ChevronDown size={14} className="text-[#8e8e93]" />
-        </motion.span>
-      </button>
-
-      <AnimatePresence initial={false}>
-        {isExpanded ? (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={CARD_EXPAND_TRANSITION}
-          >
-            <div className="space-y-3 px-11 pb-4 pt-2">
+        </>
+      }
+    >
+      <div className="space-y-3 px-11 pb-4 pt-2">
               {/* 输入参数 */}
               {formattedInput ? (
                 <div>
@@ -338,9 +328,6 @@ function GenericToolCallCard({ tool }: ToolCallCardProps) {
                 </div>
               ) : null}
             </div>
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
-    </motion.div>
+    </BaseCard>
   );
 }

@@ -1,4 +1,5 @@
-import { Chat, Message, MessageSegment } from '../types';
+import { Chat, Message, MessageSegment, ToolCall } from '../types';
+import { appendThinkingContent, appendVisibleContent } from '../utils/messageContentProtocol';
 
 export function updateChatEntry(
   chats: Chat[],
@@ -45,12 +46,16 @@ export function updateMessageInList(
 /**
  * 将 delta 追加到 segments 末尾的同类型分段；若末尾类型不同则新建分段。
  */
-function appendToSegment(segments: MessageSegment[], type: MessageSegment['type'], delta: string): MessageSegment[] {
+function appendToSegment(
+  segments: MessageSegment[],
+  type: 'reasoning' | 'content',
+  delta: string,
+): MessageSegment[] {
   const last = segments[segments.length - 1];
   if (last?.type === type) {
-    return [...segments.slice(0, -1), { ...last, content: (last as { type: typeof type; content: string }).content + delta }];
+    return [...segments.slice(0, -1), { ...last, content: last.content + delta }];
   }
-  return [...segments, { type, content: delta } as MessageSegment];
+  return [...segments, { type, content: delta }];
 }
 
 export function appendReasoningDelta(
@@ -60,8 +65,8 @@ export function appendReasoningDelta(
 ): Message[] {
   return updateMessageInList(messages, messageId, (message) => ({
     ...message,
+    content: appendThinkingContent(message.content, delta),
     segments: appendToSegment(message.segments ?? [], 'reasoning', delta),
-    reasoning: (message.reasoning ?? '') + delta,
     rawResponse: `${message.rawResponse ?? ''}${delta}`,
     status: 'reasoning' as const,
   }));
@@ -75,7 +80,7 @@ export function appendContentDelta(
   return updateMessageInList(messages, messageId, (message) => ({
     ...message,
     segments: appendToSegment(message.segments ?? [], 'content', delta),
-    content: message.content + delta,
+    content: appendVisibleContent(message.content, delta),
     rawResponse: `${message.rawResponse ?? ''}${delta}`,
     status: 'typing' as const,
   }));
@@ -87,11 +92,11 @@ export function appendContentDelta(
 export function appendToolCallSegments(
   messages: Message[],
   messageId: string,
-  newCalls: { id: string; name: string; input: unknown; status: string }[],
+  newCalls: ToolCall[],
 ): Message[] {
   return updateMessageInList(messages, messageId, (message) => {
     if (newCalls.length === 0) return message;
-    const toolSeg: MessageSegment = { type: 'tool_calls', calls: newCalls as any };
+    const toolSeg: MessageSegment = { type: 'tool_calls', calls: newCalls };
     return { ...message, segments: [...(message.segments ?? []), toolSeg] };
   });
 }

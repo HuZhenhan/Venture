@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from "react";
 import { motion } from "motion/react";
 import { PanelLeftClose, PanelRightClose } from "lucide-react";
 import { APPLE_CURVE } from "../constants";
+import { TapScale } from "./common/animations";
 
 interface SidebarToggleButtonProps {
   isOpen: boolean;
@@ -17,17 +18,17 @@ export function SidebarToggleButton({ isOpen, onClick, side = "left", className 
 
   // Electron 无边框窗口：直接设置 DOM style 确保 no-drag 生效，绕过 CSS/className 可能不生效的问题
   useEffect(() => {
-    if (__IS_ELECTRON__ && buttonRef.current) {
+    if (typeof __IS_ELECTRON__ !== 'undefined' && __IS_ELECTRON__ && buttonRef.current) {
       buttonRef.current.style.webkitAppRegion = 'no-drag';
     }
   }, []);
 
   return (
-    <motion.button
+    <TapScale
+      as="button"
       ref={buttonRef}
       type="button"
       onClick={onClick}
-      whileTap={{ scale: 0.92 }}
       className={`flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-all hover:bg-muted/50 hover:text-foreground ${className}`}
       aria-label={ariaLabel}
     >
@@ -44,6 +45,6 @@ export function SidebarToggleButton({ isOpen, onClick, side = "left", className 
       >
         <Icon className="h-[18px] w-[18px]" />
       </motion.div>
-    </motion.button>
+    </TapScale>
   );
 }

@@ -24,6 +24,8 @@ import { PermissionSelector } from "./PermissionSelector";
 import { RichComposerEditor } from "./RichComposerEditor";
 import { ACCEPTED_ATTACHMENT_TYPES } from "../../utils/uploadedResources";
 
+const OPEN_CHANGE_REVIEW_EVENT = 'venture:open-change-review';
+
 interface ChatInputProps {
   inputAreaRef?: React.RefObject<HTMLDivElement>;
   onMessageSent?: () => void;
@@ -116,6 +118,17 @@ export function ChatInput({ inputAreaRef, onMessageSent }: ChatInputProps = {}) 
   }, [openCodeReferenceAction, openDiffAction, setActiveChatId]);
 
   const handleEditorSubmit = React.useCallback(() => {
+    const changesMatch = draftMessage.trim().match(/^\/changes(?:\s+(.+))?$/i);
+    if (changesMatch) {
+      window.dispatchEvent(new CustomEvent(OPEN_CHANGE_REVIEW_EVENT, {
+        detail: { turnId: changesMatch[1]?.trim() || undefined },
+      }));
+      setDraftMessage("");
+      setDraftNodes([]);
+      editorRef.current?.clear();
+      return;
+    }
+
     const debugCommand = parseDebugCommand(draftMessage);
     if (debugCommand) {
       if (debugCommand.module === 'OriginalContent') {

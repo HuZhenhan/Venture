@@ -28,6 +28,7 @@ interface MessageContentRendererProps {
   onUpdateAskBlock: (messageId: string, askId: string, answer: { selectedOptions?: string[]; text?: string }) => void;
   onSkipAskBlock: (messageId: string, askId: string) => void;
   onApproveToolCall: (messageId: string, toolId: string) => void;
+  onSessionApproveToolCall: (messageId: string, toolId: string) => void;
   onAlwaysApproveToolCall: (messageId: string, toolId: string) => void;
   onRejectToolCall: (messageId: string, toolId: string) => void;
   showReasoningTitle: boolean;
@@ -88,6 +89,7 @@ export const MessageContentRenderer = memo(function MessageContentRenderer({
   onUpdateAskBlock,
   onSkipAskBlock,
   onApproveToolCall,
+  onSessionApproveToolCall,
   onAlwaysApproveToolCall,
   onRejectToolCall,
   showReasoningTitle,
@@ -99,10 +101,12 @@ export const MessageContentRenderer = memo(function MessageContentRenderer({
     () => adaptLegacyMessageContent(message),
     [message],
   );
+  const hasProtocolContent = /\[(?:thinking|error|attachment)]/.test(rawContent);
+  const shouldRenderLegacySegments = hasSegments && !hasProtocolContent;
   const nodes = useMemo(
     () => {
       const parsed = parseMessageContent(rawContent);
-      if (hasSegments) {
+      if (shouldRenderLegacySegments) {
         // 时序分段模式：text/thinking 由 segments 渲染，这里只保留 error/attachment
         return parsed.filter((node) =>
           node.type === 'tag' && ['error', 'attachment'].includes(node.name),
@@ -114,7 +118,7 @@ export const MessageContentRenderer = memo(function MessageContentRenderer({
       }
       return parsed;
     },
-    [rawContent, hasSeparateReasoning, hasSegments],
+    [rawContent, hasSeparateReasoning, shouldRenderLegacySegments],
   );
   const lastTextIndex = nodes.findLastIndex((node) => node.type === 'text' && node.content.length > 0);
 
@@ -167,9 +171,53 @@ export const MessageContentRenderer = memo(function MessageContentRenderer({
     return <span key={key}>{renderNodes(node.children, key)}</span>;
   });
 
+  const renderToolCallCards = (tools = message.toolCalls ?? []): React.ReactNode => {
+    if (tools.length === 0) return null;
+    return tools.map((tool) => {
+      if (tool.status === 'needs_approval') {
+        return (
+          <ToolApprovalCard
+            key={tool.id}
+            tool={tool}
+            onApprove={(toolId) => onApproveToolCall(message.id, toolId)}
+            onSessionApprove={(toolId) => onSessionApproveToolCall(message.id, toolId)}
+            onAlwaysApprove={(toolId) => onAlwaysApproveToolCall(message.id, toolId)}
+            onReject={(toolId) => onRejectToolCall(message.id, toolId)}
+          />
+        );
+      }
+      if (tool.name === 'AskUserQuestion') {
+        const ask = toolCallToAskForm(tool);
+        if (!ask) {
+          return (
+            <motion.div key={tool.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }}>
+              <ToolCallCard tool={tool} />
+            </motion.div>
+          );
+        }
+        if (ask.status === 'pending') {
+          return (
+            <AskCardFull
+              key={tool.id}
+              ask={ask}
+              onAnswer={(askId, answer) => onUpdateAskBlock(message.id, askId, answer)}
+              onSkip={(askId) => onSkipAskBlock(message.id, askId)}
+            />
+          );
+        }
+        return <AskCardInline key={tool.id} ask={ask} />;
+      }
+      return (
+        <motion.div key={tool.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }}>
+          <ToolCallCard tool={tool} />
+        </motion.div>
+      );
+    });
+  };
+
   return (
     <>
-      {hasSegments ? (
+      {shouldRenderLegacySegments ? (
         // 时序分段模式：按 streaming 到达顺序渲染
         segments!.map((seg, i) => {
           const isLastSeg = i === segments!.length - 1;
@@ -212,6 +260,7 @@ export const MessageContentRenderer = memo(function MessageContentRenderer({
                     key={tool.id}
                     tool={tool}
                     onApprove={(toolId) => onApproveToolCall(message.id, toolId)}
+                    onSessionApprove={(toolId) => onSessionApproveToolCall(message.id, toolId)}
                     onAlwaysApprove={(toolId) => onAlwaysApproveToolCall(message.id, toolId)}
                     onReject={(toolId) => onRejectToolCall(message.id, toolId)}
                   />
@@ -261,53 +310,11 @@ export const MessageContentRenderer = memo(function MessageContentRenderer({
               />
             </motion.div>
           )}
-          {message.toolCalls && message.toolCalls.length > 0 && (
-            <>
-              {message.toolCalls.map((tool) => {
-                if (tool.status === 'needs_approval') {
-                  return (
-                    <ToolApprovalCard
-                      key={tool.id}
-                      tool={tool}
-                      onApprove={(toolId) => onApproveToolCall(message.id, toolId)}
-                      onAlwaysApprove={(toolId) => onAlwaysApproveToolCall(message.id, toolId)}
-                      onReject={(toolId) => onRejectToolCall(message.id, toolId)}
-                    />
-                  );
-                }
-                if (tool.name === 'AskUserQuestion') {
-                  const ask = toolCallToAskForm(tool);
-                  if (!ask) {
-                    // 无法构造 AskForm（输入异常）时回退为通用工具卡片，避免静默消失
-                    return (
-                      <motion.div key={tool.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }}>
-                        <ToolCallCard tool={tool} />
-                      </motion.div>
-                    );
-                  }
-                  if (ask.status === 'pending') {
-                    return (
-                      <AskCardFull
-                        key={tool.id}
-                        ask={ask}
-                        onAnswer={(askId, answer) => onUpdateAskBlock(message.id, askId, answer)}
-                        onSkip={(askId) => onSkipAskBlock(message.id, askId)}
-                      />
-                    );
-                  }
-                  return <AskCardInline key={tool.id} ask={ask} />;
-                }
-                return (
-                  <motion.div key={tool.id} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }}>
-                    <ToolCallCard tool={tool} />
-                  </motion.div>
-                );
-              })}
-            </>
-          )}
+          {!hasProtocolContent && renderToolCallCards()}
         </>
       )}
       {renderNodes(nodes, message.id)}
+      {hasProtocolContent && renderToolCallCards()}
     </>
   );
 });

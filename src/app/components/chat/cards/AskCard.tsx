@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Check, ChevronDown, Pencil } from "lucide-react";
+import { Check, Pencil } from "lucide-react";
 import { AskForm } from "../../../types";
-import { APPLE_CURVE, CARD_EXPAND_TRANSITION, CARD_HEADER_TRANSITION } from "../../../constants";
+import { CARD_EXPAND_TRANSITION } from "../../../constants";
 import { getToolCardClasses } from "./toolCardStyles";
+import { BaseCard } from "./BaseCard";
 
 const OTHER_ID = "__other__";
 
@@ -113,42 +114,26 @@ export function AskCard({ ask, onSubmit }: AskCardProps) {
   };
 
   return (
-    <motion.div
-      initial={{ opacity: 0, scale: 0.95, y: 10 }}
-      animate={{ opacity: 1, scale: 1, y: 0 }}
-      transition={{ duration: 0.6, ease: APPLE_CURVE }}
-      className="w-full max-w-[651px] overflow-hidden rounded-2xl border border-border text-left shadow-[0_8px_20px_-20px_rgba(3,2,19,0.15)] transition-[border-color,box-shadow] duration-500 ease-[cubic-bezier(0.32,0.72,0,1)]"
-    >
-      <button
-        type="button"
-        onClick={() => setIsExpanded((v) => !v)}
-        className="flex w-full items-center gap-3 rounded-xl px-4 py-2.5 text-left transition-colors duration-500 hover:bg-muted/40"
-      >
+    <BaseCard
+      expanded={isExpanded}
+      onExpandedChange={setIsExpanded}
+      icon={
         <span className="flex size-5 shrink-0 items-center justify-center rounded-full bg-muted/50">
           {icon}
         </span>
-        <div className="min-w-0 flex-1 flex items-center gap-2">
+      }
+      headerContent={
+        <>
           <span className={`text-[12px] font-medium tracking-tight whitespace-nowrap ${styles.eyebrow}`}>
             {statusText}
           </span>
           <span className="truncate text-[12px] font-medium tracking-tight text-foreground">
             {ask.question}
           </span>
-        </div>
-        <motion.span animate={{ rotate: isExpanded ? 0 : 180 }} transition={CARD_HEADER_TRANSITION} className="shrink-0">
-          <ChevronDown size={14} className="text-[#8e8e93]" />
-        </motion.span>
-      </button>
-
-      <AnimatePresence initial={false}>
-        {isExpanded ? (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={CARD_EXPAND_TRANSITION}
-          >
-            <div className="px-11 pb-4 pt-1 space-y-3">
+        </>
+      }
+    >
+      <div className="px-11 pb-4 pt-1 space-y-3">
               {/* Mode label */}
               {!isAnswered && (
                 <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
@@ -223,9 +208,6 @@ export function AskCard({ ask, onSubmit }: AskCardProps) {
                 </div>
               )}
             </div>
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
-    </motion.div>
+    </BaseCard>
   );
 }

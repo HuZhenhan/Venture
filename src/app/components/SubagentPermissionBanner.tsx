@@ -1,6 +1,7 @@
 import { motion, AnimatePresence } from "motion/react";
 import { ShieldAlert, Check, ShieldCheck, X } from "lucide-react";
 import { useSubagentStore } from "../store/useSubagentStore";
+import { buildPermissionRequestCopy } from "../utils/toolPermissions";
 
 /**
  * 子代理权限审批横幅（设计稿 §11.2 适配：Ask 效果的决策方为前端审批 UI）。
@@ -18,7 +19,15 @@ export function SubagentPermissionBanner() {
   return (
     <div className="pointer-events-none fixed inset-x-0 top-3 z-[90] flex flex-col items-center gap-2 px-4">
       <AnimatePresence>
-        {pendingPermissions.map((req) => (
+        {pendingPermissions.map((req) => {
+          const copy = buildPermissionRequestCopy({
+            actor: 'subagent',
+            toolName: req.tool,
+            reason: req.reason,
+            timeoutSeconds: 30,
+          });
+          const riskLabel = req.riskLevel === 'high' ? '高风险' : req.riskLevel === 'medium' ? '中风险' : '低风险';
+          return (
           <motion.div
             key={req.requestId}
             initial={{ opacity: 0, y: -12, scale: 0.98 }}
@@ -32,8 +41,13 @@ export function SubagentPermissionBanner() {
               </div>
               <div className="min-w-0 flex-1">
                 <div className="text-sm font-medium">
-                  子代理请求使用工具：<code className="rounded bg-muted px-1 py-0.5 text-xs">{req.tool}</code>
+                  {copy.title}
                 </div>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span className="rounded-full border border-amber-500/30 px-2 py-0.5 text-[11px] text-amber-600">{riskLabel}</span>
+                  <span>{copy.description}</span>
+                </div>
+                <p className="mt-1 break-all text-[11px] text-muted-foreground">影响范围：{req.impact?.value ?? req.tool}</p>
                 <pre className="mt-1.5 max-h-24 overflow-auto whitespace-pre-wrap break-all rounded-md bg-muted/60 p-2 text-xs text-muted-foreground">
                   {formatInput(req.input)}
                 </pre>
@@ -42,13 +56,13 @@ export function SubagentPermissionBanner() {
                     className="inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-xs font-medium text-primary-foreground hover:opacity-90"
                     onClick={() => void resolvePermission(req.requestId, "approve")}
                   >
-                    <Check size={12} /> 同意
+                    <Check size={12} /> 本次同意
                   </button>
                   <button
                     className="inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-medium hover:bg-muted"
                     onClick={() => void resolvePermission(req.requestId, "always_approve")}
                   >
-                    <ShieldCheck size={12} /> 一律同意
+                    <ShieldCheck size={12} /> 本会话/永久同意
                   </button>
                   <button
                     className="inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-medium text-destructive hover:bg-destructive/10"
@@ -57,13 +71,14 @@ export function SubagentPermissionBanner() {
                     <X size={12} /> 拒绝
                   </button>
                   <span className="ml-auto text-[11px] text-muted-foreground">
-                    30 秒无响应将自动拒绝
+                    {copy.timeoutHint}
                   </span>
                 </div>
               </div>
             </div>
           </motion.div>
-        ))}
+          );
+        })}
       </AnimatePresence>
     </div>
   );

@@ -1,6 +1,8 @@
 import React from 'react';
-import { X } from 'lucide-react';
+import { FileText } from 'lucide-react';
 import { type BrowserSummary, type BrowserSummaryChunk } from '../types';
+import { PanelHeader } from './shared/PanelHeader';
+import { useLayoutStore } from '../store/useLayoutStore';
 
 interface BrowserSummaryPanelProps {
   summary: BrowserSummary | null;
@@ -75,24 +77,18 @@ export const BrowserSummaryPanel: React.FC<BrowserSummaryPanelProps> = ({
 
   return (
     <div className='flex flex-col h-full bg-background border-l border-border overflow-hidden'>
-      <div className='flex items-center justify-between shrink-0 border-b border-border px-4 py-3'>
-        <div className='flex flex-col gap-1'>
-          <h3 className='text-sm font-semibold text-foreground'>网页摘要</h3>
-          <p className='text-xs text-muted-foreground truncate'>{summary.url}</p>
-        </div>
-        <button
-          onClick={onClose}
-          className='flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground'
-          aria-label='关闭摘要面板'
-        >
-          <X size={16} />
-        </button>
-      </div>
+      <PanelHeader
+        title="页面文本摘取"
+        subtitle={summary.url}
+        icon={<FileText size={16} />}
+        badge={`${summary.chunks.length} 块`}
+        onClose={onClose}
+      />
 
       <div className='flex-1 overflow-y-auto p-4'>
         {summary.status === 'failed' ? (
           <div className='rounded-lg border border-destructive/30 bg-background/95 px-3 py-2 text-xs text-destructive'>
-            {summary.error || '摘取失败'}
+            {summary.error || '页面文本摘取失败'}
           </div>
         ) : (
           <div className='space-y-1'>
@@ -109,8 +105,8 @@ export const BrowserSummaryPanel: React.FC<BrowserSummaryPanelProps> = ({
         )}
       </div>
 
-      <div className='shrink-0 border-t border-border bg-muted/20 px-4 py-2 text-xs text-muted-foreground'>
-        {summary.chunks.length} 个内容块 · {new Date(summary.timestamp).toLocaleTimeString()}
+      <div className='shrink-0 border-t border-border bg-muted/20 px-4 py-2 text-[11px] text-muted-foreground'>
+        DOM 可见文本摘取结果（非 AI 总结）· {new Date(summary.timestamp).toLocaleTimeString()}
       </div>
     </div>
   );

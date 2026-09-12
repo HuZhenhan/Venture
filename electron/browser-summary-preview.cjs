@@ -1,6 +1,6 @@
 'use strict';
 
-// 提取页面核心文字内容：分块摘录可见文本，剔除图片/按钮/脚本等非文本节点。
+// 页面文本摘取预览：分块摘录 DOM 可见文本，不调用模型总结。
 const SUMMARY_PREVIEW_SCRIPT = `
 (() => {
   const ROOT_ID = 'venture-summary-preview';
@@ -9,7 +9,7 @@ const SUMMARY_PREVIEW_SCRIPT = `
   if (existing) existing.remove();
   document.getElementById(STYLE_ID)?.remove();
 
-  // ── 摘取动画样式 ──────────────────────────────────────────────────────────
+  // ── 文本摘取动画样式 ──────────────────────────────────────────────────────
   const style = document.createElement('style');
   style.id = STYLE_ID;
   style.textContent = \`
@@ -126,7 +126,7 @@ const SUMMARY_PREVIEW_SCRIPT = `
   const root = document.createElement('div');
   root.id = ROOT_ID;
   root.setAttribute('role', 'status');
-  root.setAttribute('aria-label', '正在摘取网页核心信息');
+  root.setAttribute('aria-label', '正在摘取页面文本');
 
   const frame = document.createElement('div');
   frame.className = 'venture-summary-frame';
@@ -137,7 +137,7 @@ const SUMMARY_PREVIEW_SCRIPT = `
   const dot = document.createElement('span');
   dot.className = 'venture-summary-dot';
   const label = document.createElement('span');
-  label.textContent = '正在摘取核心信息';
+  label.textContent = '正在摘取页面文本';
   status.append(dot, label);
   root.append(frame, scan, status);
   document.documentElement.append(style, root);

@@ -3,13 +3,19 @@ import { motion } from 'motion/react';
 import { Loader2, X } from 'lucide-react';
 import { APPLE_CURVE } from '../../constants';
 import { useSkillStore } from '../../store/useSkillStore';
-import { AppleToggle } from '../settings/SettingsSidebarPanels';
+import { Toggle } from '../common';
 
 interface SkillCreateDialogProps {
   onClose: () => void;
 }
 
 const NAME_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+
+interface FieldErrors {
+  name?: string;
+  description?: string;
+  whenToUse?: string;
+}
 
 export function SkillCreateDialog({ onClose }: SkillCreateDialogProps) {
   const create = useSkillStore((state) => state.create);
@@ -20,12 +26,37 @@ export function SkillCreateDialog({ onClose }: SkillCreateDialogProps) {
   const [body, setBody] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
-  const nameValid = NAME_PATTERN.test(name);
-  const canSubmit = nameValid && description.trim().length > 0 && !submitting;
+  const validateFields = (): FieldErrors => {
+    const errors: FieldErrors = {};
+    const trimmedName = name.trim();
+    const trimmedDescription = description.trim();
+    const trimmedWhenToUse = whenToUse.trim();
+    if (!trimmedName) {
+      errors.name = '名称必填';
+    } else if (trimmedName.length > 64 || !NAME_PATTERN.test(trimmedName)) {
+      errors.name = '仅支持小写字母、数字和单连字符，最长 64 字符';
+    }
+    if (!trimmedDescription) {
+      errors.description = '描述必填';
+    } else if (trimmedDescription.length > 500) {
+      errors.description = '描述不能超过 500 字符';
+    }
+    if (autoInvocable && !trimmedWhenToUse) {
+      errors.whenToUse = '允许 AI 自动调用时，触发条件必填';
+    } else if (trimmedWhenToUse.length > 100) {
+      errors.whenToUse = '触发条件不能超过 100 字符';
+    }
+    return errors;
+  };
+
+  const canSubmit = !submitting;
 
   const handleSubmit = async () => {
-    if (!canSubmit) return;
+    const nextErrors = validateFields();
+    setFieldErrors(nextErrors);
+    if (Object.keys(nextErrors).length > 0 || !canSubmit) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -79,12 +110,12 @@ export function SkillCreateDialog({ onClose }: SkillCreateDialogProps) {
             <label className="mb-1 block text-[11px] font-medium text-muted-foreground">名称</label>
             <input
               value={name}
-              onChange={(event) => setName(event.target.value)}
+              onChange={(event) => { setName(event.target.value); setFieldErrors((value) => ({ ...value, name: undefined })); }}
               placeholder="my-skill"
               className="w-full rounded-xl border border-border bg-muted/20 px-3 py-2 font-mono text-[12px] text-foreground outline-none placeholder:text-muted-foreground focus:border-foreground/30"
             />
-            <p className={`mt-1 text-[10px] ${name && !nameValid ? 'text-[#d65a54]' : 'text-muted-foreground'}`}>
-              小写字母、数字与连字符（如 pdf-tools）
+            <p className={`mt-1 text-[10px] ${fieldErrors.name ? 'text-[#d65a54]' : 'text-muted-foreground'}`}>
+              {fieldErrors.name ?? '小写字母、数字与连字符（如 pdf-tools）'}
             </p>
           </div>
 
@@ -92,25 +123,27 @@ export function SkillCreateDialog({ onClose }: SkillCreateDialogProps) {
             <label className="mb-1 block text-[11px] font-medium text-muted-foreground">描述</label>
             <input
               value={description}
-              onChange={(event) => setDescription(event.target.value)}
+              onChange={(event) => { setDescription(event.target.value); setFieldErrors((value) => ({ ...value, description: undefined })); }}
               placeholder="这个技能做什么"
               className="w-full rounded-xl border border-border bg-muted/20 px-3 py-2 text-[12px] text-foreground outline-none placeholder:text-muted-foreground focus:border-foreground/30"
             />
+            {fieldErrors.description && <p className="mt-1 text-[10px] text-[#d65a54]">{fieldErrors.description}</p>}
           </div>
 
           <div>
-            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">适用场景（可选）</label>
+            <label className="mb-1 block text-[11px] font-medium text-muted-foreground">触发条件{autoInvocable ? '' : '（可选）'}</label>
             <input
               value={whenToUse}
-              onChange={(event) => setWhenToUse(event.target.value)}
+              onChange={(event) => { setWhenToUse(event.target.value); setFieldErrors((value) => ({ ...value, whenToUse: undefined })); }}
               placeholder="什么时候应该使用这个技能"
               className="w-full rounded-xl border border-border bg-muted/20 px-3 py-2 text-[12px] text-foreground outline-none placeholder:text-muted-foreground focus:border-foreground/30"
             />
+            {fieldErrors.whenToUse && <p className="mt-1 text-[10px] text-[#d65a54]">{fieldErrors.whenToUse}</p>}
           </div>
 
           <div className="flex items-center justify-between rounded-xl border border-border bg-muted/20 px-3 py-2">
             <span className="text-[12px] text-foreground">允许 AI 自动调用</span>
-            <AppleToggle size="sm" checked={autoInvocable} onChange={() => setAutoInvocable((value) => !value)} />
+            <Toggle size="sm" checked={autoInvocable} onChange={() => { setAutoInvocable((value) => !value); setFieldErrors((value) => ({ ...value, whenToUse: undefined })); }} />
           </div>
 
           <div>

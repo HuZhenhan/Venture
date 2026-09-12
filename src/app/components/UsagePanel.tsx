@@ -4,6 +4,8 @@ import { Zap, ArrowUpRight, ArrowDownRight, Database } from 'lucide-react';
 import { APPLE_CURVE } from '../constants';
 import { Message } from '../types';
 import { useChatStore } from '../store/useChatStore';
+import { PanelHeader } from './shared/PanelHeader';
+import { useLayoutStore } from '../store/useLayoutStore';
 
 interface UsagePanelProps {
   isOpen: boolean;
@@ -25,6 +27,7 @@ export const UsagePanel: React.FC<UsagePanelProps> = ({
   isOpen, 
   width = 400 
 }) => {
+  const closePanel = useLayoutStore((state) => state.closePanel);
   const activeChat = useChatStore((state) => state.getActiveChat());
   const apiConfigs = useChatStore((state) => state.apiConfigs);
   const usageMessages = activeChat?.messages.filter((message) => message.role === 'ai' && message.usage) ?? [];
@@ -57,6 +60,12 @@ export const UsagePanel: React.FC<UsagePanelProps> = ({
       className={`shrink-0 h-full flex flex-col bg-sidebar z-20 overflow-hidden ${isOpen ? "border-l border-border" : "pointer-events-none"}`}
     >
       <div className="flex-1 flex flex-col h-full relative" style={{ width }}>
+        <PanelHeader
+          title="Token 统计"
+          icon={<Database size={16} />}
+          onClose={() => closePanel('usage')}
+        />
+        
         {/* Content */}
         <div className="flex-1 overflow-y-auto custom-scrollbar px-5 pb-8 pt-6 space-y-4 relative z-10">
           

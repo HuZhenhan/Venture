@@ -37,6 +37,12 @@ const DEFAULT_PREFERENCES: AppPreferences = {
   autoGenerateConversationTitles: true,
   autoGenerateReasoningTitles: true,
   debugMode: false,
+  browser: {
+    currentUrl: 'https://www.bing.com',
+    canGoBack: false,
+    canGoForward: false,
+    lastOpenedAt: null,
+  },
 };
 
 // 旧版/未重启的后端可能没有 app-data 路由；404 后本次运行直接熔断，避免每次状态变更重复请求。
@@ -183,5 +189,21 @@ function normalizePreferences(
       ? value.autoGenerateReasoningTitles
       : legacyAutoGenerateTitles ?? DEFAULT_PREFERENCES.autoGenerateReasoningTitles,
     debugMode: typeof value.debugMode === 'boolean' ? value.debugMode : DEFAULT_PREFERENCES.debugMode,
+    browser: normalizeBrowserPreferences(value.browser),
+  };
+}
+
+function normalizeBrowserPreferences(value: unknown): AppPreferences['browser'] {
+  if (!value || typeof value !== 'object') return DEFAULT_PREFERENCES.browser;
+  const record = value as Partial<Record<keyof AppPreferences['browser'], unknown>>;
+  return {
+    currentUrl: typeof record.currentUrl === 'string' && record.currentUrl.trim()
+      ? record.currentUrl
+      : DEFAULT_PREFERENCES.browser.currentUrl,
+    canGoBack: typeof record.canGoBack === 'boolean' ? record.canGoBack : DEFAULT_PREFERENCES.browser.canGoBack,
+    canGoForward: typeof record.canGoForward === 'boolean' ? record.canGoForward : DEFAULT_PREFERENCES.browser.canGoForward,
+    lastOpenedAt: typeof record.lastOpenedAt === 'number' && Number.isFinite(record.lastOpenedAt)
+      ? record.lastOpenedAt
+      : DEFAULT_PREFERENCES.browser.lastOpenedAt,
   };
 }

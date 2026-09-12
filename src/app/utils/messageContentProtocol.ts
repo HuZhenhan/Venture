@@ -16,6 +16,8 @@ const TAG_NAMES: readonly MessageContentTag[] = [
 ];
 const TAG_NAME_SET = new Set<string>(TAG_NAMES);
 const TAG_PATTERN = /\[\/?([a-z]+)]/g;
+const CONTROL_TAG_PATTERN = /\[\/?(?:thinking|error|attachment|code|time|message|suggestion|title|id|name|mime|size|kind|text|data)]/g;
+const THINKING_CLOSE = '[/thinking]';
 
 function appendText(nodes: MessageContentNode[], content: string) {
   if (!content) return;
@@ -49,10 +51,13 @@ export function parseMessageContent(content: string): MessageContentNode[] {
     cursor = TAG_PATTERN.lastIndex;
   }
 
-  appendText(stack.at(-1)?.children ?? root, content.slice(cursor));
+  appendText(stack.length > 0 ? stack[stack.length - 1].children : root, content.slice(cursor));
   while (stack.length > 0) {
     const unclosed = stack.pop();
-    if (unclosed) (stack.at(-1)?.children ?? root).push({ type: 'tag', ...unclosed });
+    if (unclosed) {
+      const parent = stack.length > 0 ? stack[stack.length - 1].children : root;
+      parent.push({ type: 'tag', ...unclosed });
+    }
   }
   return root;
 }
@@ -66,6 +71,26 @@ export function serializeContentNodes(nodes: MessageContentNode[]): string {
 
 export function createTaggedContent(name: MessageContentTag, content: string): string {
   return `[${name}]${content}[/${name}]`;
+}
+
+function stripProtocolTags(delta: string): string {
+  return delta.replace(CONTROL_TAG_PATTERN, '');
+}
+
+export function appendThinkingContent(content: string, delta: string): string {
+  const cleanDelta = stripProtocolTags(delta);
+  if (!cleanDelta) return content;
+
+  if (content.endsWith(THINKING_CLOSE)) {
+    return `${content.slice(0, -THINKING_CLOSE.length)}${cleanDelta}${THINKING_CLOSE}`;
+  }
+
+  return `${content}${createTaggedContent('thinking', cleanDelta)}`;
+}
+
+export function appendVisibleContent(content: string, delta: string): string {
+  const cleanDelta = stripProtocolTags(delta);
+  return cleanDelta ? `${content}${cleanDelta}` : content;
 }
 
 export function getNodeText(node: MessageContentNode): string {
@@ -262,4 +287,3 @@ export function toolCallToAskForm(tool: ToolCall): AskForm | null {
     answer,
   };
 }
-

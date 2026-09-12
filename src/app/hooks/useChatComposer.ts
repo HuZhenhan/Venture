@@ -12,6 +12,7 @@ import {
 } from '../utils/codeReferences';
 import { createUploadedResourceReference, isImageResource, readFileAsUploadedResource } from '../utils/uploadedResources';
 import { debugLog, debugError } from '../utils/debugLogger';
+import { resolveModelCapabilities } from '../utils/modelCapabilities';
 import { toast } from 'sonner';
 
 interface ComposerEditorHandle {
@@ -52,12 +53,15 @@ export function useChatComposer({ onMessageSent }: UseChatComposerArgs) {
 
   const availableModels = useMemo(() => (
     apiConfigs.flatMap((config) =>
-      config.models.filter((model) => model.enabled).map((model) => ({
-        id: model.id,
-        name: model.name,
-        provider: config.name,
-        supportsMultimodal: model.supportsMultimodal ?? false,
-      })),
+      config.models.filter((model) => model.enabled).map((model) => {
+        const capabilities = resolveModelCapabilities(model, config);
+        return {
+          id: model.id,
+          name: model.name,
+          provider: config.name,
+          capabilities,
+        };
+      }),
     )
   ), [apiConfigs]);
 
@@ -132,7 +136,7 @@ export function useChatComposer({ onMessageSent }: UseChatComposerArgs) {
     abortControllerRef.current = new AbortController();
     const signal = abortControllerRef.current.signal;
 
-    const currentSupportsImages = selectedModel?.supportsMultimodal ?? false;
+    const currentSupportsImages = selectedModel?.capabilities.supportsMultimodal ?? false;
     const nextReferences: ComposerReference[] = [];
 
     for (const file of incoming) {
@@ -186,7 +190,7 @@ export function useChatComposer({ onMessageSent }: UseChatComposerArgs) {
     setDraftReferences((previous) => mergeComposerReferences(previous, nextReferences));
     focusComposer();
     debugLog('upload', 'commit done');
-  }, [focusComposer, selectedModel?.supportsMultimodal, setDraftReferences]);
+  }, [focusComposer, selectedModel?.capabilities.supportsMultimodal, setDraftReferences]);
 
   const handleSubmit = useCallback((event?: React.FormEvent) => {
     event?.preventDefault();

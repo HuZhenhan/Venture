@@ -24,7 +24,7 @@ interface NativeBrowserState {
   canGoForward: boolean;
   isLoading: boolean;
   visible: boolean;
-  error?: string;
+  error?: string | null;
 }
 
 interface BrowserSummaryChunk {

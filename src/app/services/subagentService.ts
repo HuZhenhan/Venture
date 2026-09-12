@@ -27,6 +27,7 @@ export interface SubagentSseEvent {
     requestId?: string;
     tool?: string;
     input?: unknown;
+    reason?: string;
     // subagent_failed
     error?: string;
     kind?: string;
@@ -50,6 +51,9 @@ export interface SubagentPermissionRequest {
   taskId: string;
   tool: string;
   input: unknown;
+  reason?: string;
+  riskLevel?: 'low' | 'medium' | 'high';
+  impact?: { kind: string; value: string };
   requestedAt: number;
 }
 
@@ -80,6 +84,7 @@ export function subscribeSubagentEvents(
       'subagent_permission_request',
       'subagent_permission_resolved',
       'subagent_recovery',
+      'workflow_dag',
       'lagged',
     ];
     types.forEach((type) => {

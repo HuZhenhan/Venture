@@ -3,12 +3,15 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Check, CheckCheck, ChevronDown, ShieldAlert, X } from 'lucide-react';
 import { ToolCall } from '../../../types';
 import { APPLE_CURVE, CARD_EXPAND_TRANSITION, CARD_HEADER_TRANSITION } from '../../../constants';
+import { buildPermissionRequestCopy, impactSummaryForTool, riskLevelForTool } from '../../../utils/toolPermissions';
 import { formatInput, inputSummary } from './ToolCallCard';
 
 interface ToolApprovalCardProps {
   tool: ToolCall;
   /** 同意（仅本次调用）。 */
   onApprove: (toolId: string) => void;
+  /** 本会话同意（运行期有效）。 */
+  onSessionApprove: (toolId: string) => void;
   /** 一律同意（完全相同（工具、参数）的调用之后自动同意）。 */
   onAlwaysApprove: (toolId: string) => void;
   /** 拒绝。 */
@@ -31,11 +34,19 @@ function truncateForHeader(text: string, max = 60): string {
  * 卡片渲染条件为 tool.status === 'needs_approval'，该状态随会话持久化，
  * 因此软件关闭重开后卡片会照常显示、等待用户决定。
  */
-export function ToolApprovalCard({ tool, onApprove, onAlwaysApprove, onReject }: ToolApprovalCardProps) {
+export function ToolApprovalCard({ tool, onApprove, onSessionApprove, onAlwaysApprove, onReject }: ToolApprovalCardProps) {
   const [isExpanded, setIsExpanded] = useState(true);
 
   const summary = inputSummary(tool);
   const formattedInput = formatInput(tool.input);
+  const copy = buildPermissionRequestCopy({
+    actor: 'tool',
+    toolName: tool.name,
+    reason: tool.permissionPrompt ?? tool.description,
+  });
+  const riskLevel = tool.riskLevel ?? riskLevelForTool(tool.name);
+  const riskLabel = riskLevel === 'high' ? '高风险' : riskLevel === 'medium' ? '中风险' : '低风险';
+  const impact = impactSummaryForTool(tool.name, tool.input);
 
   return (
     <motion.div
@@ -57,7 +68,10 @@ export function ToolApprovalCard({ tool, onApprove, onAlwaysApprove, onReject }:
             权限请求
           </span>
           <span className="truncate text-[12px] font-semibold tracking-tight text-foreground">
-            {tool.name}
+            {copy.title}
+          </span>
+          <span className="shrink-0 rounded-full border border-amber-500/30 px-1.5 py-0.5 text-[10px] text-amber-600">
+            {riskLabel}
           </span>
           {summary ? (
             <span className="truncate text-[12px] text-muted-foreground/80 font-mono">
@@ -82,17 +96,26 @@ export function ToolApprovalCard({ tool, onApprove, onAlwaysApprove, onReject }:
               {/* 描述区域（预留显示位置，暂未启用：等待后续接入操作描述来源） */}
               <div>
                 <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1">
-                  描述
+                  请求原因
                 </div>
                 <p className="text-[12px] leading-5 text-muted-foreground/60">
-                  {tool.description ?? '暂无描述'}
+                  {copy.description}
+                </p>
+              </div>
+
+              <div>
+                <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1">
+                  影响范围
+                </div>
+                <p className="break-all rounded-xl border border-border bg-muted/20 px-3 py-2 text-[11px] leading-5 text-muted-foreground">
+                  {impact}
                 </p>
               </div>
 
               {/* 传入参数 */}
               <div>
                 <div className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium mb-1.5">
-                  传入参数
+                  {copy.inputLabel}
                 </div>
                 <pre className="max-h-[240px] overflow-auto rounded-xl border border-border bg-muted/30 p-3 text-[11px] leading-relaxed text-foreground/90 font-mono whitespace-pre-wrap break-all">
                   {formattedInput || '{}'}
@@ -112,11 +135,19 @@ export function ToolApprovalCard({ tool, onApprove, onAlwaysApprove, onReject }:
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
+                    onClick={() => onSessionApprove(tool.id)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium rounded-lg border border-border text-foreground hover:bg-muted/50 transition-all"
+                  >
+                    <CheckCheck size={11} />
+                    本会话同意
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => onAlwaysApprove(tool.id)}
                     className="flex items-center gap-1.5 px-3 py-1.5 text-[12px] font-medium rounded-lg border border-border text-foreground hover:bg-muted/50 transition-all"
                   >
                     <CheckCheck size={11} />
-                    一律同意
+                    永久同意
                   </button>
                   <button
                     type="button"

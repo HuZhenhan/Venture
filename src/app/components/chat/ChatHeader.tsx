@@ -6,6 +6,7 @@ import { selectResponsiveLayout, useLayoutStore } from "../../store/useLayoutSto
 import { APPLE_CURVE } from "../../constants";
 import { ChatMode } from "../../types";
 import CustomTitleBar from "../window/CustomTitleBar";
+import { TapScale } from "../common/animations";
 
 const CHAT_MODES: { id: ChatMode; label: string; icon: ComponentType<{ size?: number; className?: string; strokeWidth?: number }> }[] = [
   { id: 'yolo', label: 'YOLO', icon: Sparkles },
@@ -80,8 +81,8 @@ export function ChatHeader() {
             const Icon = m.icon;
             const isActive = currentMode === m.id;
             return (
-              <motion.button
-                whileTap={{ scale: 0.92 }}
+              <TapScale
+                as="button"
                 key={m.id}
                 onClick={() => handleModeChange(m.id)}
                 className={`relative flex items-center gap-1.5 px-3 py-1 rounded-[9.5px] transition-colors duration-200 min-w-[64px] justify-center ${
@@ -104,11 +105,11 @@ export function ChatHeader() {
                 <span className="relative z-10 text-[10px] font-bold tracking-wider uppercase">
                   {m.label}
                 </span>
-              </motion.button>
+              </TapScale>
             );
           })}
         </div>
-        {__IS_ELECTRON__ && <CustomTitleBar />}
+        {typeof __IS_ELECTRON__ !== 'undefined' && __IS_ELECTRON__ && <CustomTitleBar />}
       </div>
     </div>
   );

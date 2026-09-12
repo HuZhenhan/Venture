@@ -3,6 +3,9 @@ import { motion, AnimatePresence } from "motion/react";
 import { ChevronUp, CheckCircle2, Loader2, Circle, AlertCircle } from "lucide-react";
 import { Task } from "../types";
 import { APPLE_CURVE } from "../constants";
+import { useChatStore } from "../store/useChatStore";
+import { useRunStore } from "../store/useRunStore";
+import { TapScale } from "./common/animations";
 
 interface FloatingTaskIndicatorProps {
   tasks: Task[];
@@ -11,6 +14,24 @@ interface FloatingTaskIndicatorProps {
 export function FloatingTaskIndicator({ tasks, isActive }: FloatingTaskIndicatorProps) {
   const [isOpen, setIsOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const activeChatId = useChatStore((state) => state.activeChatId);
+  const initRunStore = useRunStore((state) => state.init);
+  const refreshRuns = useRunStore((state) => state.refresh);
+  const runTasks = useRunStore((state) => {
+    const selectedTasks = state.tasksForChat(activeChatId);
+    // #region agent log
+    fetch('http://127.0.0.1:7562/ingest/572e99fe-bfce-422d-b9c9-bd5aa9018362',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'6722c2'},body:JSON.stringify({sessionId:'6722c2',runId:'initial',hypothesisId:'H1',location:'FloatingTaskIndicator.tsx:19',message:'floating task selector evaluated',data:{activeChatId:activeChatId??null,taskCount:selectedTasks.length},timestamp:Date.now()})}).catch(()=>{});
+    // #endregion
+    return selectedTasks;
+  });
+
+  useEffect(() => {
+    initRunStore();
+  }, [initRunStore]);
+
+  useEffect(() => {
+    void refreshRuns(activeChatId ?? undefined);
+  }, [activeChatId, refreshRuns]);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -22,11 +43,13 @@ export function FloatingTaskIndicator({ tasks, isActive }: FloatingTaskIndicator
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [isOpen]);
 
-  if (!tasks || tasks.length === 0) return null;
+  const displayTasks = runTasks.length > 0 ? runTasks : tasks;
 
-  const completedCount = tasks.filter(t => t.status === 'completed').length;
-  const totalCount = tasks.length;
-  const failedCount = tasks.filter(t => t.status === 'failed').length;
+  if (!displayTasks || displayTasks.length === 0) return null;
+
+  const completedCount = displayTasks.filter(t => t.status === 'completed').length;
+  const totalCount = displayTasks.length;
+  const failedCount = displayTasks.filter(t => t.status === 'failed').length;
 
   const getStatusIcon = (status: Task['status']) => {
     switch (status) {
@@ -43,10 +66,10 @@ export function FloatingTaskIndicator({ tasks, isActive }: FloatingTaskIndicator
 
   return (
     <div className="flex flex-col items-center w-full relative z-40" ref={containerRef}>
-      <motion.button
+      <TapScale
+        as="button"
         layout
         whileHover={{ scale: 1.05 }}
-        whileTap={{ scale: 0.95 }}
         onClick={() => setIsOpen(!isOpen)}
         className={`
           relative flex items-center justify-center w-32 h-[14px] transition-all duration-300 z-50 bg-input-background backdrop-blur-3xl
@@ -63,7 +86,7 @@ export function FloatingTaskIndicator({ tasks, isActive }: FloatingTaskIndicator
         >
           <ChevronUp size={12} className="text-muted-foreground" strokeWidth={3} />
         </motion.div>
-      </motion.button>
+      </TapScale>
 
       <AnimatePresence initial={false}>
         {isOpen && (
@@ -83,7 +106,7 @@ export function FloatingTaskIndicator({ tasks, isActive }: FloatingTaskIndicator
               </div>
               
               <div className="space-y-3 px-1">
-                {tasks.map((task) => (
+                {displayTasks.map((task) => (
                   <div key={task.id} className="flex flex-col gap-1">
                     <div className="flex items-start gap-2 min-w-0 w-full">
                       <div className="shrink-0 mt-[2px]">

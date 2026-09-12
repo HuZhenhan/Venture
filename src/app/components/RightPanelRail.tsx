@@ -1,7 +1,8 @@
 import { motion, AnimatePresence } from 'motion/react';
-import { MessageSquareText, Settings2, Activity, Globe, SlidersHorizontal, Key, HardDriveDownload, FileText, Workflow, ScrollText } from 'lucide-react';
+import { MessageSquareText, Settings2, Activity, SlidersHorizontal, Key, HardDriveDownload, FileText, Workflow, ScrollText, Plug, History } from 'lucide-react';
 import { APPLE_CURVE } from '../constants';
-import { type SettingsTab, useLayoutStore, selectActiveSettingsTab, selectSetActiveSettingsTab } from '../store/useLayoutStore';
+import { type SettingsTab, useLayoutStore, selectActiveSettingsTab, selectSetActiveSettingsTab, selectIsChangeReviewOpen, selectToggleChangeReview } from '../store/useLayoutStore';
+import { TapScale } from './common/animations';
 
 interface RightPanelRailProps {
   isChatActive: boolean;
@@ -12,10 +13,10 @@ interface RightPanelRailProps {
   isBrowserSummaryOpen: boolean;
   isWorkflowActive: boolean;
   isSkillsActive: boolean;
+  isCapabilitiesActive: boolean;
   onShowChat: () => void;
   onToggleSettings: () => void;
   onToggleUsage: () => void;
-  onToggleBrowser: () => void;
   onToggleBrowserSummary: () => void;
   onToggleWorkflow: () => void;
   onToggleSkills: () => void;
@@ -38,13 +39,13 @@ const SETTINGS_TABS: ReadonlyArray<{
   { id: 'api', label: 'API', icon: Key },
   { id: 'migration', label: '迁移', icon: HardDriveDownload },
   { id: 'skills', label: '技能', icon: ScrollText },
+  { id: 'mcp', label: 'MCP', icon: Plug },
 ] as const;
 
 function RailButton({ isActive, label, onClick, controlsId, children }: RailButtonProps) {
   return (
-    <motion.button
-      whileTap={{ scale: 0.92 }}
-      transition={{ duration: 0.15, ease: APPLE_CURVE }}
+    <TapScale
+      as="button"
       type="button"
       onClick={onClick}
       aria-label={label}
@@ -66,7 +67,7 @@ function RailButton({ isActive, label, onClick, controlsId, children }: RailButt
         />
       )}
       <span className="relative z-10 flex items-center justify-center">{children}</span>
-    </motion.button>
+    </TapScale>
   );
 }
 
@@ -79,16 +80,18 @@ export function RightPanelRail({
   isBrowserSummaryOpen,
   isWorkflowActive,
   isSkillsActive,
+  isCapabilitiesActive,
   onShowChat,
   onToggleSettings,
   onToggleUsage,
-  onToggleBrowser,
   onToggleBrowserSummary,
   onToggleWorkflow,
   onToggleSkills,
 }: RightPanelRailProps) {
   const activeSettingsTab = useLayoutStore(selectActiveSettingsTab);
   const setActiveSettingsTab = useLayoutStore(selectSetActiveSettingsTab);
+  const isChangeReviewOpen = useLayoutStore(selectIsChangeReviewOpen);
+  const toggleChangeReview = useLayoutStore(selectToggleChangeReview);
   const settingsMenuId = 'right-rail-settings-menu';
 
   return (
@@ -96,9 +99,6 @@ export function RightPanelRail({
       <div className="flex flex-col items-center gap-2">
         <RailButton isActive={isChatActive} label="显示聊天栏" onClick={onShowChat}>
           <MessageSquareText size={17} />
-        </RailButton>
-        <RailButton isActive={isBrowserActive} label={isBrowserOpen ? (isBrowserActive ? '收起浏览器' : '显示浏览器') : '打开浏览器'} onClick={onToggleBrowser}>
-          <Globe size={17} />
         </RailButton>
         <RailButton isActive={isWorkflowActive} label={isWorkflowActive ? '收起工作流' : '打开工作流'} onClick={onToggleWorkflow}>
           <Workflow size={17} />
@@ -109,8 +109,12 @@ export function RightPanelRail({
       </div>
 
       <div className="flex flex-col items-center gap-2 w-full relative">
-        <RailButton isActive={isBrowserSummaryOpen} label={isBrowserSummaryOpen ? '收起摘要' : '展开摘要'} onClick={onToggleBrowserSummary}>
+        <RailButton isActive={isBrowserSummaryOpen} label={isBrowserSummaryOpen ? '收起文本摘取' : '展开文本摘取'} onClick={onToggleBrowserSummary}>
           <FileText size={17} />
+        </RailButton>
+
+        <RailButton isActive={isChangeReviewOpen} label={isChangeReviewOpen ? '收起变更审阅' : '打开变更审阅'} onClick={() => toggleChangeReview()}>
+          <History size={17} />
         </RailButton>
 
         <RailButton isActive={isUsageOpen} label={isUsageOpen ? '收起用量' : '展开用量'} onClick={onToggleUsage}>
@@ -143,11 +147,11 @@ export function RightPanelRail({
                   const isActive = activeSettingsTab === tab.id;
                   const Icon = tab.icon;
                   return (
-                    <motion.button
+                    <TapScale
+                      as="button"
                       key={tab.id}
                       type="button"
                       onClick={() => setActiveSettingsTab(tab.id)}
-                      whileTap={{ scale: 0.92 }}
                       title={tab.label}
                       aria-label={`打开${tab.label}设置`}
                       aria-pressed={isActive}
@@ -165,7 +169,7 @@ export function RightPanelRail({
                       <span className="relative z-10 flex items-center justify-center">
                         <Icon size={17} />
                       </span>
-                    </motion.button>
+                    </TapScale>
                   );
                 })}
               </div>

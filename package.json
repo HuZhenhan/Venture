@@ -18,9 +18,14 @@
     "build:portable": "node scripts/clean-dist.js && npm run build:backend && npm run build:desktop-web && node scripts/build-desktop.mjs portable",
     "build:installer": "node scripts/clean-dist.js && npm run build:backend && npm run build:desktop-web && node scripts/build-desktop.mjs installer",
     "build:backend": "cargo build --release --manifest-path backend/Cargo.toml",
-    "preview:web": "vite preview --host 127.0.0.1 --port 4173"
+    "preview:web": "vite preview --host 127.0.0.1 --port 4173",
+    "test:message-content": "node scripts/validate-message-content-protocol.mjs",
+    "cli:jsonl": "node scripts/venture-jsonl.mjs"
   },
   "dependencies": {
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/cli": "^8.5.0",
+    "@capacitor/core": "^8.5.0",
     "@emotion/react": "11.14.0",
     "@emotion/styled": "11.14.1",
     "@mui/icons-material": "7.3.5",
@@ -162,9 +167,6 @@
       ],
       "requestedExecutionLevel": "asInvoker",
       "artifactName": "Venture-Setup-${version}.exe"
-    },
-    "portable": {
-      "artifactName": "Venture-Portable-${version}.exe"
     },
     "nsis": {
       "oneClick": false,

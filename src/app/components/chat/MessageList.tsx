@@ -107,6 +107,7 @@ export function MessageList({ scrollContainerRef, paddingBottom }: MessageListPr
                     onUpdateAskBlock={actions.handleUpdateAskBlock}
                     onSkipAskBlock={actions.handleSkipAskBlock}
                     onApproveToolCall={actions.handleApproveToolCall}
+                    onSessionApproveToolCall={actions.handleSessionApproveToolCall}
                     onAlwaysApproveToolCall={actions.handleAlwaysApproveToolCall}
                     onRejectToolCall={actions.handleRejectToolCall}
                     onMarkdownComplete={actions.handleMarkdownComplete}

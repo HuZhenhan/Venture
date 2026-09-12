@@ -27,6 +27,7 @@ import { useLayoutStore } from '../../../store/useLayoutStore';
 import { getResidualMessageBlocks } from '../../../utils/messageContentProtocol';
 import { MessageContentRenderer } from './MessageContentRenderer';
 import { MessageTextSelectionMenu } from './MessageTextSelectionMenu';
+import { TapScale } from '../../common/animations';
 
 export const ScrollRootCtx = createContext<React.MutableRefObject<HTMLDivElement | null>>({ current: null });
 
@@ -71,6 +72,7 @@ interface MessageItemProps {
   onUpdateAskBlock: (messageId: string, askId: string, answer: { selectedOptions?: string[]; text?: string }) => void;
   onSkipAskBlock: (messageId: string, askId: string) => void;
   onApproveToolCall: (messageId: string, toolId: string) => void;
+  onSessionApproveToolCall: (messageId: string, toolId: string) => void;
   onAlwaysApproveToolCall: (messageId: string, toolId: string) => void;
   onRejectToolCall: (messageId: string, toolId: string) => void;
   onMarkdownComplete: (messageId: string) => void;
@@ -349,9 +351,9 @@ const MessageBlock = memo(function MessageBlock({
 
   if (block.type === 'diff') {
     return (
-      <motion.button onClick={() => onOpenDiff(block.diff.id)} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }} className="w-full text-left">
+      <TapScale as="button" onClick={() => onOpenDiff(block.diff.id)} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: APPLE_CURVE }} className="w-full text-left">
         <DiffPreview diff={block.diff} compact />
-      </motion.button>
+      </TapScale>
     );
   }
 
@@ -563,6 +565,7 @@ export const MessageItem = memo(function MessageItem({
   onUpdateAskBlock,
   onSkipAskBlock,
   onApproveToolCall,
+  onSessionApproveToolCall,
   onAlwaysApproveToolCall,
   onRejectToolCall,
   onMarkdownComplete,
@@ -674,6 +677,7 @@ export const MessageItem = memo(function MessageItem({
                 onUpdateAskBlock={onUpdateAskBlock}
                 onSkipAskBlock={onSkipAskBlock}
                 onApproveToolCall={onApproveToolCall}
+                onSessionApproveToolCall={onSessionApproveToolCall}
                 onAlwaysApproveToolCall={onAlwaysApproveToolCall}
                 onRejectToolCall={onRejectToolCall}
                 showReasoningTitle={autoGenerateReasoningTitles}

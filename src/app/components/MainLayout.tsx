@@ -1,16 +1,17 @@
-import React, { useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useCallback, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Sidebar } from './Sidebar';
 import { ChatArea } from './ChatArea';
 import { ChatHeader } from './chat/ChatHeader';
 import { SidebarToggleButton } from './SidebarToggleButton';
 import { RightPanelRail } from './RightPanelRail';
-import { BrowserPanel } from './BrowserPanel';
+import { ChangeReviewPanel } from './ChangeReviewPanel';
 import { WorkflowCanvas } from './WorkflowCanvas';
 import { SkillPanel } from './skills/SkillPanel';
 import { DesktopPanels, SinglePagePanels } from './layout/MainLayoutPanels';
 import { useChatStore } from '../store/useChatStore';
 import { selectSelectedSkillName, useSkillStore } from '../store/useSkillStore';
+import { TapScale } from './common/animations';
 import { 
   selectResponsiveLayout, 
   selectIsSidebarOpen,
@@ -29,6 +30,7 @@ import {
   selectToggleBrowserSummary,
   selectToggleWorkflow,
   selectToggleSkills,
+  selectToggleCapabilities,
   selectSyncPanelVisibility,
   selectShowChatPanel,
   selectTogglePanel,
@@ -38,6 +40,11 @@ import {
   selectIsResizingEditor,
   selectShowTestButton,
   selectShowLayoutDebug,
+  selectIsChangeReviewOpen,
+  selectChangeReviewTurnId,
+  selectChangeReviewWidth,
+  selectToggleChangeReview,
+  selectSetChangeReviewWidth,
   useLayoutStore 
 } from '../store/useLayoutStore';
 import { AMBIENT_BG, RIGHT_RAIL_WIDTH, APPLE_CURVE, DURATION, PANEL_TRANSITION } from '../constants';
@@ -49,6 +56,8 @@ const TOGGLE_TOP = 10;
 
 export function MainLayout() {
   const { apiConfigs, setApiConfigs } = useChatStore();
+  const chats = useChatStore((state) => state.chats);
+  const activeChatId = useChatStore((state) => state.activeChatId);
 
   const isSidebarOpen = useLayoutStore(selectIsSidebarOpen);
   const isSettingsOpen = useLayoutStore(selectIsSettingsOpen);
@@ -63,7 +72,6 @@ export function MainLayout() {
   const setSettingsWidth = useLayoutStore(selectSetSettingsWidth);
   const singlePageView = useLayoutStore(selectSinglePageView);
   const toggleSidebar = useLayoutStore(selectToggleSidebar);
-  const toggleBrowser = useLayoutStore(selectToggleBrowser);
   const toggleBrowserSummary = useLayoutStore(selectToggleBrowserSummary);
   const toggleWorkflow = useLayoutStore(selectToggleWorkflow);
   const toggleSkills = useLayoutStore(selectToggleSkills);
@@ -76,6 +84,11 @@ export function MainLayout() {
   const responsiveWidths = useLayoutStore(selectResponsiveLayout);
   const showTestButton = useLayoutStore(selectShowTestButton);
   const showLayoutDebug = useLayoutStore(selectShowLayoutDebug);
+  const isChangeReviewOpen = useLayoutStore(selectIsChangeReviewOpen);
+  const changeReviewTurnId = useLayoutStore(selectChangeReviewTurnId);
+  const changeReviewWidth = useLayoutStore(selectChangeReviewWidth);
+  const toggleChangeReview = useLayoutStore(selectToggleChangeReview);
+  const setChangeReviewWidth = useLayoutStore(selectSetChangeReviewWidth);
 
   const handleResize = useCallback(() => {
     setViewportWidth(window.innerWidth);
@@ -103,6 +116,7 @@ export function MainLayout() {
     browserWidth,
     settingsPanelWidth,
     browserParticipatesInLayout,
+    capabilitiesPanelWidth,
     settingsParticipatesInLayout,
     usageParticipatesInLayout,
     singlePageContentWidth,
@@ -150,7 +164,6 @@ export function MainLayout() {
     isSettingsOpen,
     isUsageOpen,
   });
-  const showDockedBrowser = !singlePageMode && adaptiveVisibility.showBrowser;
   const showDockedWorkflow = !singlePageMode && adaptiveVisibility.showWorkflow;
   const showDockedSkills = !singlePageMode && adaptiveVisibility.showSkills;
   // skill 详情/编辑态：面板扩展占满对话区域（chat 隐藏但保持挂载），列表态恢复原样
@@ -161,10 +174,20 @@ export function MainLayout() {
   const toggleSettings = useCallback(() => togglePanel('settings'), [togglePanel]);
   const toggleUsage = useCallback(() => togglePanel('usage'), [togglePanel]);
   const showChat = useCallback(() => showChatPanel(), [showChatPanel]);
-  const handleToggleBrowser = useCallback(() => toggleBrowser(), [toggleBrowser]);
   const handleToggleBrowserSummary = useCallback(() => toggleBrowserSummary(), [toggleBrowserSummary]);
   const handleToggleWorkflow = useCallback(() => toggleWorkflow(), [toggleWorkflow]);
   const handleToggleSkills = useCallback(() => toggleSkills(), [toggleSkills]);
+
+  const activeChat = useMemo(() => (
+    chats.find((chat) => chat.id === activeChatId) ?? null
+  ), [activeChatId, chats]);
+  const latestUserTurnId = useMemo(() => {
+    const userMessages = activeChat?.messages.filter((message) => message.role === 'user') ?? [];
+    return userMessages.length > 0 ? userMessages[userMessages.length - 1].id : null;
+  }, [activeChat]);
+  const handleToggleChangeReview = useCallback(() => {
+    toggleChangeReview(latestUserTurnId ?? undefined);
+  }, [toggleChangeReview, latestUserTurnId]);
 
   // ── Lazy panel mounting ──────────────────────────────────────────────────────
   // Panels that have never been opened are NOT mounted in the DOM, saving initial
@@ -194,12 +217,13 @@ export function MainLayout() {
             top: { duration: DURATION.fast, ease: APPLE_CURVE },
             opacity: { duration: DURATION.micro + 0.09 },
           }}
-          className={`absolute z-50 ${__IS_ELECTRON__ ? 'no-drag' : ''}`}
+          className={`absolute z-50 ${typeof __IS_ELECTRON__ !== 'undefined' && __IS_ELECTRON__ ? 'no-drag' : ''}`}
         >
           <div className="flex items-center gap-2">
             <SidebarToggleButton isOpen={isSidebarOpen} onClick={toggleSidebar} />
             {showTestButton && (
-              <motion.button
+              <TapScale
+                as="button"
                 initial={{ opacity: 0, scale: 0.8 }}
                 animate={{ opacity: 1, scale: 1 }}
                 className="flex h-8 w-8 items-center justify-center rounded-lg bg-red-500/20 text-red-400 border border-red-500/40 hover:bg-red-500/30 transition-all text-xs font-bold"
@@ -207,14 +231,15 @@ export function MainLayout() {
                 aria-label="测试按钮"
               >
                 T
-              </motion.button>
+              </TapScale>
             )}
           </div>
         </motion.div>
 
         <AnimatePresence initial={false}>
           {shouldUseSidebarOverlay && isSidebarOpen && (
-            <motion.button
+            <TapScale
+              as="button"
               type="button"
               aria-label="关闭侧边栏遮罩"
               initial={{ opacity: 0 }}
@@ -258,19 +283,7 @@ export function MainLayout() {
               <ChatArea />
             </motion.main>
 
-            {/* 浏览器面板：与对话区域同级平铺 */}
-            <motion.div
-              initial={false}
-              animate={{ width: showDockedBrowser ? browserWidth : 0, opacity: showDockedBrowser ? 1 : 0 }}
-              transition={PANEL_TRANSITION}
-              className={`shrink-0 flex h-full overflow-hidden ${showDockedBrowser ? 'border-l border-border' : 'pointer-events-none'}`}
-            >
-              <BrowserPanel
-                isOpen={isBrowserOpen}
-                width={browserWidth}
-                isNativeViewHidden={adaptiveVisibility.isBrowserNativeViewHidden || !showDockedBrowser}
-              />
-            </motion.div>
+
 
             {/* 工作流面板：与对话区域同级平铺 */}
             <motion.div
@@ -291,6 +304,8 @@ export function MainLayout() {
             >
               <SkillPanel />
             </motion.div>
+
+
 
             {/* 小屏幕下的遮罩层 (与左侧栏对齐的逻辑) */}
             <AnimatePresence>
@@ -337,6 +352,27 @@ export function MainLayout() {
                 onSettingsWidthChange={setSettingsWidth}
               />
             ) : null}
+
+            <AnimatePresence>
+              {isChangeReviewOpen && activeChatId && (
+                <motion.aside
+                  initial={{ x: '100%', opacity: 0 }}
+                  animate={{ x: 0, opacity: 1 }}
+                  exit={{ x: '100%', opacity: 0 }}
+                  transition={PANEL_TRANSITION}
+                  className="absolute inset-y-0 right-0 z-50 overflow-hidden border-l border-border bg-background shadow-[-18px_0_40px_-28px_rgba(0,0,0,0.45)]"
+                  style={{ width: Math.min(changeReviewWidth, singlePageContentWidth) }}
+                >
+                  <ChangeReviewPanel
+                    chatId={activeChatId}
+                    turnId={changeReviewTurnId ?? ''}
+                    onClose={() => toggleChangeReview()}
+                    width={changeReviewWidth}
+                    onWidthChange={setChangeReviewWidth}
+                  />
+                </motion.aside>
+              )}
+            </AnimatePresence>
           </motion.div>
 
           <div
@@ -353,13 +389,14 @@ export function MainLayout() {
                 isBrowserSummaryOpen={isBrowserSummaryOpen}
                 isWorkflowActive={railState.workflowActive}
                 isSkillsActive={railState.skillsActive}
+                isCapabilitiesActive={railState.capabilitiesActive}
                 onShowChat={showChat}
                 onToggleSettings={toggleSettings}
                 onToggleUsage={toggleUsage}
-                onToggleBrowser={handleToggleBrowser}
                 onToggleBrowserSummary={handleToggleBrowserSummary}
                 onToggleWorkflow={handleToggleWorkflow}
                 onToggleSkills={handleToggleSkills}
+                onToggleChangeReview={handleToggleChangeReview}
               />
             </div>
           </div>
